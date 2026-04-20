@@ -1,0 +1,205 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-primary: #111119;
+  --bg-card: #1e1c2a;
+  --bg-elevated: #252337;
+  --text-primary: #f0ebe0;
+  --text-muted: #877d72;
+  --gold: #c9a96e;
+  --gold-dim: #9a7a4f;
+  --slate: #3a5f82;
+  --border-subtle: rgba(201, 169, 110, 0.12);
+  --border-gold: rgba(201, 169, 110, 0.28);
+  --border-gold-active: rgba(201, 169, 110, 0.7);
+  --border-slate: rgba(58, 95, 130, 0.4);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'DM Sans', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(201, 169, 110, 0.2);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(201, 169, 110, 0.4);
+}
+
+/* Story textarea */
+.story-text {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 1.125rem;
+  line-height: 1.9;
+  letter-spacing: 0.01em;
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  width: 100%;
+  min-height: 100%;
+}
+
+.story-text::placeholder {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* React Flow overrides */
+.react-flow__background {
+  background: var(--bg-primary) !important;
+}
+
+.react-flow__edge-path {
+  stroke: var(--border-gold) !important;
+  stroke-width: 1.5px !important;
+}
+
+.react-flow__edge.branch-edge .react-flow__edge-path {
+  stroke: var(--border-slate) !important;
+  stroke-dasharray: 6, 4 !important;
+}
+
+.react-flow__controls {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: 4px !important;
+  overflow: hidden;
+}
+
+.react-flow__controls-button {
+  background: transparent !important;
+  border-bottom-color: var(--border-subtle) !important;
+  color: var(--text-muted) !important;
+  fill: var(--text-muted) !important;
+}
+
+.react-flow__controls-button:hover {
+  background: var(--bg-elevated) !important;
+  fill: var(--gold) !important;
+}
+
+.react-flow__minimap {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: 4px !important;
+}
+
+/* Node card hover actions */
+.node-actions {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.story-node-wrapper:hover .node-actions {
+  opacity: 1;
+}
+
+/* Chat message entry animation */
+@keyframes msgIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.msg-enter {
+  animation: msgIn 0.2s ease forwards;
+}
+
+/* Drawer slide-in */
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideOut {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+.drawer-enter {
+  animation: slideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Editor overlay fade */
+@keyframes overlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.overlay-enter {
+  animation: overlayIn 0.18s ease forwards;
+}
+
+/* Cursor blink for streaming */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.cursor-blink::after {
+  content: '▋';
+  color: var(--gold);
+  animation: blink 1s step-end infinite;
+  font-size: 0.9em;
+  margin-left: 1px;
+}
+
+/* Pulse for generating state */
+@keyframes gentlePulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+.generating-pulse {
+  animation: gentlePulse 1.5s ease-in-out infinite;
+}
+
+/* Prevent text selection on node drag */
+.react-flow__node {
+  user-select: none;
+}
