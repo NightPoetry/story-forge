@@ -18,7 +18,7 @@ jobs:
             args: '--target universal-apple-darwin'
           - os: ubuntu-22.04
             args: ''
-          - os: windows-latest
+          - os: windows-2022
             args: ''
 
     runs-on: ${{ matrix.os }}
