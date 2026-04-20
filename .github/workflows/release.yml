@@ -19,7 +19,7 @@ jobs:
           - os: ubuntu-22.04
             args: ''
           - os: windows-2022
-            args: ''
+            args: '--bundles nsis'
 
     runs-on: ${{ matrix.os }}
 
