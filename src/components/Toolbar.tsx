@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useStore } from '../store'
 import { useProjectStore } from '../projectStore'
 import ExportModal from './ExportModal'
+import WritingGuideModal from './WritingGuideModal'
 
 interface Props {
   onOpenApiSettings: () => void
@@ -10,20 +11,34 @@ interface Props {
   onBack: () => void
 }
 
-export default function Toolbar({
-  onOpenApiSettings, isDirty, onManualSave, onBack,
-}: Props) {
+export default function Toolbar({ onOpenApiSettings, isDirty, onManualSave, onBack }: Props) {
   const {
     apiKey, apiFormat, apiModel, isGenerating,
-    setIsGlobalSettingsOpen, editingNodeId,
-    autoSave, setAutoSave, undoStack, redoStack,
+    setIsGlobalSettingsOpen, editingNodeId, setEditingNode,
+    autoSave, setAutoSave,
+    nodes, continueNode, branchNode, getAncestorChain,
+    projectWritingGuide,
   } = useStore()
   const { projects, currentProjectId } = useProjectStore()
 
   const [showExport, setShowExport] = useState(false)
+  const [showGuide, setShowGuide] = useState(false)
 
   const project = projects.find((p) => p.id === currentProjectId)
   const modelShort = apiModel.length > 20 ? apiModel.slice(0, 18) + '…' : apiModel
+  const editingNode = editingNodeId ? nodes[editingNodeId] : null
+
+  const handleContinue = () => {
+    if (!editingNodeId) return
+    const newId = continueNode(editingNodeId)
+    setEditingNode(newId)
+  }
+
+  const handleBranch = () => {
+    if (!editingNodeId) return
+    const newId = branchNode(editingNodeId)
+    setEditingNode(newId)
+  }
 
   return (
     <>
@@ -35,11 +50,10 @@ export default function Toolbar({
           zIndex: 10,
         }}>
         {/* Left */}
-        <div className="flex items-center gap-3">
-          {/* Back to projects */}
+        <div className="flex items-center gap-2.5 min-w-0 overflow-hidden">
           <button
             onClick={onBack}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs transition-all hover:opacity-80"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs transition-all hover:opacity-80 flex-shrink-0"
             style={{ color: 'var(--text-muted)', border: '1px solid var(--border-subtle)' }}>
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
               <path d="M7 1L3 5L7 9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
@@ -47,31 +61,38 @@ export default function Toolbar({
             项目
           </button>
 
-          {/* Divider */}
-          <div style={{ width: 1, height: 16, background: 'var(--border-subtle)' }} />
+          <div className="flex-shrink-0" style={{ width: 1, height: 16, background: 'var(--border-subtle)' }} />
 
-          {/* Logo */}
-          <div
-            className="w-5 h-5 rounded-sm flex items-center justify-center"
+          <div className="w-5 h-5 rounded-sm flex items-center justify-center flex-shrink-0"
             style={{ background: 'var(--gold)', opacity: 0.9 }}>
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
               <path d="M1 11L4 7L7 9L11 1" stroke="#0e0d15" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </div>
 
-          {/* Project name */}
-          <span className="font-serif text-sm" style={{ color: 'var(--text-primary)', letterSpacing: '0.03em' }}>
-            {project?.name ?? '叙事工坊'}
-          </span>
+          {/* Project name + breadcrumbs */}
+          <div className="flex items-center gap-1.5 min-w-0 overflow-hidden">
+            <span className="font-serif text-sm flex-shrink-0" style={{ color: editingNode ? 'var(--text-muted)' : 'var(--text-primary)', letterSpacing: '0.03em' }}>
+              {project?.name ?? '叙事工坊'}
+            </span>
+            {editingNode && (
+              <>
+                <svg width="8" height="8" viewBox="0 0 8 8" fill="none" className="flex-shrink-0" style={{ opacity: 0.25 }}>
+                  <path d="M2 1l4 3-4 3" stroke="var(--text-muted)" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+                <BreadcrumbNav nodeId={editingNodeId!} />
+              </>
+            )}
+          </div>
 
           {/* Save indicator */}
           <button
             onClick={isDirty ? onManualSave : undefined}
-            title={isDirty ? (autoSave ? '正在等待自动保存… 点击立即保存' : '有未保存的更改，点击或 Ctrl+S 保存') : '所有更改已保存'}
-            className="flex items-center gap-1.5 ml-1 transition-all"
+            title={isDirty ? (autoSave ? '正在等待自动保存… 点击立即保存' : '有未保存的更改，Ctrl+S 保存') : '已保存'}
+            className="flex items-center gap-1.5 flex-shrink-0"
             style={{ cursor: isDirty ? 'pointer' : 'default' }}>
             <div
-              className="w-2 h-2 rounded-full flex-shrink-0 transition-all duration-300"
+              className="w-2 h-2 rounded-full transition-all duration-300"
               style={{
                 background: isDirty ? 'rgba(200,80,80,0.8)' : 'rgba(80,160,80,0.8)',
                 boxShadow: isDirty ? '0 0 6px rgba(200,80,80,0.3)' : 'none',
@@ -82,18 +103,79 @@ export default function Toolbar({
           </button>
 
           {isGenerating && (
-            <span className="text-xs generating-pulse" style={{ color: 'var(--gold)', fontSize: '11px' }}>
+            <span className="text-xs generating-pulse flex-shrink-0" style={{ color: 'var(--gold)', fontSize: '11px' }}>
               生成中…
             </span>
           )}
         </div>
 
         {/* Right */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {/* Editing actions — only when a node is open */}
+          {editingNode && (
+            <>
+              <button
+                onClick={handleContinue}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs transition-all hover:opacity-80"
+                style={{ color: 'var(--gold)', border: '1px solid var(--border-gold)', fontSize: '11px' }}>
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <path d="M5 1v8M1 6l4 3 4-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                续写
+              </button>
+              <button
+                onClick={handleBranch}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs transition-all hover:opacity-80"
+                style={{ color: '#5080a8', border: '1px solid var(--border-slate)', fontSize: '11px' }}>
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <path d="M5 1v3M2 8V6l3-2 3 2v2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                派生分支
+              </button>
+
+              <div className="flex-shrink-0" style={{ width: 1, height: 16, background: 'var(--border-subtle)', margin: '0 2px' }} />
+
+              {/* Writing guide — gold/鎏金 */}
+              <button
+                onClick={() => setShowGuide(true)}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded text-xs transition-all hover:opacity-85"
+                style={{
+                  color: 'var(--gold)',
+                  border: '1px solid var(--border-gold)',
+                  background: projectWritingGuide.trim() ? 'rgba(201,169,110,0.08)' : 'transparent',
+                  fontSize: '11px',
+                  fontWeight: 500,
+                }}>
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <path d="M2 2h6M2 5h4M2 8h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                </svg>
+                故事设定
+                {projectWritingGuide.trim() && (
+                  <span className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                    style={{ background: 'var(--gold)', opacity: 0.7 }} />
+                )}
+              </button>
+
+              <div className="flex-shrink-0" style={{ width: 1, height: 16, background: 'var(--border-subtle)', margin: '0 2px' }} />
+
+              <button
+                onClick={() => setEditingNode(null)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs transition-all hover:opacity-70"
+                style={{ color: 'var(--text-muted)', border: '1px solid var(--border-subtle)', fontSize: '11px' }}>
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <path d="M2 2l6 6M8 2L2 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                </svg>
+                关闭 Esc
+              </button>
+
+              <div className="flex-shrink-0" style={{ width: 1, height: 16, background: 'var(--border-subtle)', margin: '0 3px' }} />
+            </>
+          )}
+
           {/* Auto-save toggle */}
           <button
             onClick={() => setAutoSave(!autoSave)}
-            title={autoSave ? '自动保存已开启，点击关闭' : '自动保存已关闭，点击开启'}
+            title={autoSave ? '自动保存已开启' : '自动保存已关闭'}
             className="flex items-center gap-1 px-2 py-1.5 rounded text-xs transition-all hover:opacity-80"
             style={{
               color: autoSave ? 'rgba(80,160,80,0.7)' : 'var(--text-muted)',
@@ -166,6 +248,42 @@ export default function Toolbar({
       {showExport && editingNodeId && (
         <ExportModal nodeId={editingNodeId} onClose={() => setShowExport(false)} />
       )}
+      {showGuide && (
+        <WritingGuideModal onClose={() => setShowGuide(false)} />
+      )}
     </>
+  )
+}
+
+function BreadcrumbNav({ nodeId }: { nodeId: string }) {
+  const { nodes, getAncestorChain, setEditingNode } = useStore()
+  const node = nodes[nodeId]
+  if (!node) return null
+
+  const ancestors = getAncestorChain(nodeId)
+  const crumbs = [...ancestors, node]
+
+  return (
+    <div className="flex items-center gap-1 overflow-hidden min-w-0">
+      {crumbs.map((n, i) => (
+        <div key={n.id} className="flex items-center gap-1 min-w-0">
+          {i > 0 && (
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="none" style={{ flexShrink: 0, opacity: 0.25 }}>
+              <path d="M2 1l4 3-4 3" stroke="var(--text-muted)" strokeWidth="1.2" strokeLinecap="round" />
+            </svg>
+          )}
+          <button
+            onClick={() => setEditingNode(n.id)}
+            className="text-xs truncate max-w-20 transition-all hover:opacity-80"
+            style={{
+              color: n.id === nodeId ? 'var(--text-primary)' : 'var(--text-muted)',
+              fontWeight: n.id === nodeId ? 500 : 400,
+              fontSize: '12px',
+            }}>
+            {n.title}
+          </button>
+        </div>
+      ))}
+    </div>
   )
 }
