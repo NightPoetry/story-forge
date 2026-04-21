@@ -174,6 +174,44 @@ const TOOL_GUIDANCE = `你是专业故事创作助手。根据用户指令，调
 - 可同时调用多个工具
 - 每次响应必须调用 chat_reply 向用户简短说明操作（不要复述正文）`
 
+// Extracts the partial (or complete) string value for `key` from a partially-received
+// JSON buffer. Returns null if the key/opening-quote hasn't arrived yet.
+function extractPartialStringValue(json: string, key: string): string | null {
+  const re = new RegExp(`"${key}"\\s*:\\s*"`)
+  const match = re.exec(json)
+  if (!match) return null
+
+  let result = ''
+  let i = match.index + match[0].length
+
+  while (i < json.length) {
+    const ch = json[i]
+    if (ch === '\\') {
+      if (i + 1 >= json.length) break // incomplete escape at end of partial buffer
+      const next = json[i + 1]
+      if (next === 'u') {
+        if (i + 5 < json.length) {
+          result += String.fromCharCode(parseInt(json.slice(i + 2, i + 6), 16))
+          i += 6
+        } else {
+          break // incomplete unicode escape
+        }
+      } else {
+        const MAP: Record<string, string> = { '"': '"', '\\': '\\', 'n': '\n', 'r': '\r', 't': '\t', '/': '/' }
+        result += MAP[next] ?? next
+        i += 2
+      }
+    } else if (ch === '"') {
+      break // closing quote
+    } else {
+      result += ch
+      i++
+    }
+  }
+
+  return result
+}
+
 // ── AI Action types ────────────────────────────────────────────────────────
 
 export type AIAction =
@@ -219,6 +257,7 @@ export async function runIntelligentGeneration(
   onComplete: () => void,
   onError: (err: string) => void,
   signal?: AbortSignal,
+  onStreamDelta?: (toolName: string, text: string) => void,
 ) {
   // TOOL_GUIDANCE is already embedded in the dynamic context (last part before user message)
   const fullSystem = systemPrompt
@@ -229,7 +268,7 @@ export async function runIntelligentGeneration(
 
   if (cfg.apiFormat === 'anthropic') {
     await runAnthropicStreamingToolUse(
-      cfg, fullSystem, messages, tools, onAction, onToolStart, onComplete, onError, signal,
+      cfg, fullSystem, messages, tools, onAction, onToolStart, onComplete, onError, signal, onStreamDelta,
     )
   } else {
     await runOpenAIToolUse(
@@ -250,6 +289,7 @@ async function runAnthropicStreamingToolUse(
   onComplete: () => void,
   onError: (err: string) => void,
   signal?: AbortSignal,
+  onStreamDelta?: (toolName: string, text: string) => void,
 ) {
   const base = resolveAnthropicBase(cfg.apiUrl)
   let res: Response
@@ -325,7 +365,19 @@ async function runAnthropicStreamingToolUse(
           const delta = evt.delta as { type: string; partial_json?: string } | undefined
           if (delta?.type === 'input_json_delta' && delta.partial_json) {
             const block = blocks.get(evt.index as number)
-            if (block) block.buf += delta.partial_json
+            if (block) {
+              block.buf += delta.partial_json
+              if (onStreamDelta) {
+                const streamKey =
+                  block.name === 'write_story' ? 'content'
+                  : block.name === 'update_state_card' ? 'content'
+                  : null
+                if (streamKey) {
+                  const text = extractPartialStringValue(block.buf, streamKey)
+                  if (text !== null) onStreamDelta(block.name, text)
+                }
+              }
+            }
           }
         }
 

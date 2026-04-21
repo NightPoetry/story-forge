@@ -43,6 +43,11 @@ interface AppStore {
   apiModel: string
   isGlobalSettingsOpen: boolean
 
+  // Editor typography settings (persisted)
+  editorFontSize: number
+  editorLineHeight: number
+  editorLetterSpacing: number
+
   // Story actions
   resetWithProjectData: (nodes: Record<string, StoryNodeData>, rootNodeId: string | null, writingGuide?: string) => void
   initRootNode: () => void
@@ -72,6 +77,9 @@ interface AppStore {
   setApiModel: (model: string) => void
   setIsGlobalSettingsOpen: (open: boolean) => void
   setIsGenerating: (v: boolean) => void
+  setEditorFontSize: (v: number) => void
+  setEditorLineHeight: (v: number) => void
+  setEditorLetterSpacing: (v: number) => void
 
   // Helpers
   getAncestorChain: (nodeId: string) => StoryNodeData[]
@@ -97,6 +105,11 @@ export const useStore = create<AppStore>()(
       apiFormat: 'anthropic',
       apiModel: 'claude-sonnet-4-6',
       isGlobalSettingsOpen: false,
+
+      // Editor typography defaults
+      editorFontSize: 18,
+      editorLineHeight: 1.9,
+      editorLetterSpacing: 0.01,
 
       resetWithProjectData: (nodes, rootNodeId, writingGuide = '') =>
         set({ nodes, rootNodeId, selectedNodeId: rootNodeId, editingNodeId: null, isGenerating: false, projectWritingGuide: writingGuide }),
@@ -232,6 +245,9 @@ export const useStore = create<AppStore>()(
       setApiModel: (model) => set({ apiModel: model }),
       setIsGlobalSettingsOpen: (open) => set({ isGlobalSettingsOpen: open }),
       setIsGenerating: (v) => set({ isGenerating: v }),
+      setEditorFontSize: (v) => set({ editorFontSize: v }),
+      setEditorLineHeight: (v) => set({ editorLineHeight: v }),
+      setEditorLetterSpacing: (v) => set({ editorLetterSpacing: v }),
 
       getAncestorChain: (nodeId) => {
         const nodes = get().nodes
@@ -263,6 +279,9 @@ export const useStore = create<AppStore>()(
         apiUrl: s.apiUrl,
         apiFormat: s.apiFormat,
         apiModel: s.apiModel,
+        editorFontSize: s.editorFontSize,
+        editorLineHeight: s.editorLineHeight,
+        editorLetterSpacing: s.editorLetterSpacing,
       }),
     },
   ),
