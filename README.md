@@ -29,27 +29,38 @@
 
 | 平台 | 文件格式 |
 |------|---------|
-| macOS (Apple Silicon / Intel) | `.dmg` |
+| macOS (Apple Silicon / Intel) | `.dmg`（通用二进制） |
 | Linux | `.AppImage` / `.deb` |
-| Windows | `.msi` / `.exe` |
+| Windows | `.exe`（NSIS 安装包） |
 
-## 本地开发
+## 从源码运行
+
+### 环境要求
+
+- [Node.js](https://nodejs.org/) 18+
+- [Rust](https://rustup.rs/) stable
+- [Tauri 2 CLI](https://v2.tauri.app/start/prerequisites/)
+
+> macOS 需要 Xcode Command Line Tools；Linux 需要 `libwebkit2gtk-4.1-dev` 等系统依赖，详见 [Tauri 文档](https://v2.tauri.app/start/prerequisites/#linux)。
+
+### 安装与启动
 
 ```bash
-# 安装依赖
+git clone https://github.com/NightPoetry/story-forge.git
+cd story-forge
 npm install
-
-# 浏览器开发模式
-npm run dev
-
-# Tauri 桌面开发（热重载）
-npm run tauri:dev
-
-# 构建生产包
-npm run tauri:build
 ```
 
-**环境要求：** Node.js 20+、Rust 1.77+、系统平台对应的 Tauri 依赖
+```bash
+# 纯浏览器开发（无桌面功能，数据存 localStorage）
+npm run dev          # 打开 http://localhost:1420
+
+# Tauri 桌面应用开发（带热重载）
+npm run tauri:dev
+
+# 生产构建
+npm run tauri:build  # 产物在 src-tauri/target/release/bundle/
+```
 
 ## AI 接入
 
