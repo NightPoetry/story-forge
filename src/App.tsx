@@ -122,7 +122,7 @@ export default function App() {
           />
           <div className="flex-1 relative overflow-hidden">
             <NodeGraph />
-            {editingNodeId && <NodeEditor nodeId={editingNodeId} />}
+            {editingNodeId && <NodeEditor nodeId={editingNodeId} isDirty={isDirty} onManualSave={handleManualSave} />}
             <GlobalSettings />
             {showNodeTrash && <NodeTrashPanel onClose={() => setShowNodeTrash(false)} />}
 

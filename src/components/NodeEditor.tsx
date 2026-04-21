@@ -6,10 +6,12 @@ import WritingGuideModal from './WritingGuideModal'
 
 interface Props {
   nodeId: string
+  isDirty?: boolean
+  onManualSave?: () => void
 }
 
-export default function NodeEditor({ nodeId }: Props) {
-  const { setEditingNode, nodes, continueNode, branchNode, projectWritingGuide } = useStore()
+export default function NodeEditor({ nodeId, isDirty, onManualSave }: Props) {
+  const { setEditingNode, nodes, continueNode, branchNode, projectWritingGuide, autoSave } = useStore()
   const node = nodes[nodeId]
   const [isStreaming, setIsStreaming] = useState(false)
   const [showGuide, setShowGuide] = useState(false)
@@ -38,16 +40,17 @@ export default function NodeEditor({ nodeId }: Props) {
 
   return (
     <div
-      className="fixed inset-x-0 bottom-0 overlay-enter flex flex-col"
-      style={{
-        top: '48px',
-        zIndex: 15,
-        background: '#13111e',
-        borderTop: '1px solid var(--border-gold)',
-        boxShadow: '0 -24px 80px rgba(0,0,0,0.7)',
-      }}>
-      {/* Editor content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      className="fixed inset-0 z-20 overlay-enter flex flex-col"
+      style={{ background: 'rgba(10,9,18,0.6)', backdropFilter: 'blur(3px)' }}>
+      {/* Editor container */}
+      <div
+        className="absolute inset-x-0 bottom-0 flex flex-col"
+        style={{
+          top: '48px',
+          background: '#13111e',
+          borderTop: '1px solid var(--border-gold)',
+          boxShadow: '0 -24px 80px rgba(0,0,0,0.7)',
+        }}>
         {/* Editor top bar */}
         <div
           className="flex items-center justify-between px-4 py-2 flex-shrink-0 gap-2 min-w-0"
@@ -57,6 +60,19 @@ export default function NodeEditor({ nodeId }: Props) {
           }}>
           <div className="flex items-center gap-2 min-w-0 overflow-hidden">
             <BreadcrumbNav nodeId={nodeId} />
+            {/* Save indicator */}
+            <button
+              onClick={isDirty ? onManualSave : undefined}
+              title={isDirty ? (autoSave ? '等待自动保存… 点击立即保存' : 'Ctrl+S 保存') : '已保存'}
+              className="flex-shrink-0 transition-all"
+              style={{ cursor: isDirty ? 'pointer' : 'default' }}>
+              <div
+                className="w-2 h-2 rounded-full transition-all duration-300"
+                style={{
+                  background: isDirty ? 'rgba(200,80,80,0.8)' : 'rgba(80,160,80,0.8)',
+                  boxShadow: isDirty ? '0 0 6px rgba(200,80,80,0.3)' : 'none',
+                }} />
+            </button>
           </div>
 
           <div className="flex items-center gap-1.5 flex-shrink-0">
