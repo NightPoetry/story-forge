@@ -222,6 +222,44 @@ body {
   animation: nodeSpawn 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
 
+/* Page expand — "add a new page" feel, clip-path reveal from top-left */
+@keyframes pageExpand {
+  0% {
+    clip-path: inset(0 97% 97% 0 round 8px);
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    clip-path: inset(0 0 0 0 round 0);
+    opacity: 1;
+  }
+}
+
+.page-expand {
+  animation: pageExpand 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Branch expand — reveal from top-center for divergent feel */
+@keyframes branchExpand {
+  0% {
+    clip-path: inset(0 50% 97% 50% round 8px);
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    clip-path: inset(0 0 0 0 round 0);
+    opacity: 1;
+  }
+}
+
+.branch-expand {
+  animation: branchExpand 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
 /* Created banner — slide down, hold, slide up */
 @keyframes createdBanner {
   0%   { opacity: 0; transform: translateY(-100%); }

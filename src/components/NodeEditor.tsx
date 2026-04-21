@@ -45,7 +45,7 @@ export default function NodeEditor({ nodeId, isDirty, onManualSave }: Props) {
       style={{ background: 'rgba(10,9,18,0.6)', backdropFilter: 'blur(3px)' }}>
       {/* Editor container */}
       <div
-        className="absolute inset-x-0 bottom-0 flex flex-col"
+        className={`absolute inset-x-0 bottom-0 flex flex-col${showCreated ? (node.branchType === 'branch' ? ' branch-expand' : ' page-expand') : ''}`}
         style={{
           top: '48px',
           background: '#13111e',
