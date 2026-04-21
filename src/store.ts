@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { ApiFormat, BranchType, ChatMessage, ForeshadowingItem, FullProjectData, StateCardData, StoryNodeData } from './types'
+import { ApiFormat, BranchType, ChatMessage, ForeshadowingItem, FullProjectData, StateCardData, StoryNodeData, TrashedNodeGroup } from './types'
 import { genId } from './api'
 
 function makeNode(
@@ -35,6 +35,14 @@ interface AppStore {
   isGenerating: boolean
   projectWritingGuide: string
   writingGuideChatHistory: ChatMessage[]
+  trashedNodes: TrashedNodeGroup[]
+
+  // Undo/redo (ephemeral, not persisted)
+  undoStack: { nodes: Record<string, StoryNodeData>; rootNodeId: string | null; trashedNodes: TrashedNodeGroup[] }[]
+  redoStack: { nodes: Record<string, StoryNodeData>; rootNodeId: string | null; trashedNodes: TrashedNodeGroup[] }[]
+
+  // Settings
+  autoSave: boolean
 
   // Settings (persisted in localStorage)
   globalSettings: string
@@ -50,7 +58,7 @@ interface AppStore {
   editorLetterSpacing: number
 
   // Story actions
-  resetWithProjectData: (nodes: Record<string, StoryNodeData>, rootNodeId: string | null, writingGuide?: string, writingGuideChatHistory?: ChatMessage[]) => void
+  resetWithProjectData: (nodes: Record<string, StoryNodeData>, rootNodeId: string | null, writingGuide?: string, writingGuideChatHistory?: ChatMessage[], trashedNodes?: TrashedNodeGroup[]) => void
   initRootNode: () => void
   continueNode: (nodeId: string) => string
   branchNode: (nodeId: string) => string
@@ -74,6 +82,12 @@ interface AppStore {
   setProjectWritingGuide: (content: string) => void
   addWritingGuideChatMessage: (msg: ChatMessage) => void
   setWritingGuideChatHistory: (msgs: ChatMessage[]) => void
+  setAutoSave: (v: boolean) => void
+  pushUndoSnapshot: () => void
+  undo: () => void
+  redo: () => void
+  restoreNodeGroup: (trashId: string) => void
+  permanentDeleteNodeGroup: (trashId: string) => void
   setApiKey: (key: string) => void
   setApiUrl: (url: string) => void
   setApiFormat: (fmt: ApiFormat) => void
@@ -87,7 +101,7 @@ interface AppStore {
   // Helpers
   getAncestorChain: (nodeId: string) => StoryNodeData[]
   getChildren: (nodeId: string) => StoryNodeData[]
-  getProjectSnapshot: () => Pick<FullProjectData, 'nodes' | 'rootNodeId' | 'writingGuide' | 'writingGuideChatHistory'>
+  getProjectSnapshot: () => Pick<FullProjectData, 'nodes' | 'rootNodeId' | 'writingGuide' | 'writingGuideChatHistory' | 'trashedNodes'>
 }
 
 export const useStore = create<AppStore>()(
@@ -101,6 +115,10 @@ export const useStore = create<AppStore>()(
       isGenerating: false,
       projectWritingGuide: '',
       writingGuideChatHistory: [],
+      trashedNodes: [],
+      undoStack: [],
+      redoStack: [],
+      autoSave: true,
 
       // Settings defaults (persisted)
       globalSettings: '',
@@ -115,8 +133,8 @@ export const useStore = create<AppStore>()(
       editorLineHeight: 1.9,
       editorLetterSpacing: 0.01,
 
-      resetWithProjectData: (nodes, rootNodeId, writingGuide = '', writingGuideChatHistory = []) =>
-        set({ nodes, rootNodeId, selectedNodeId: rootNodeId, editingNodeId: null, isGenerating: false, projectWritingGuide: writingGuide, writingGuideChatHistory }),
+      resetWithProjectData: (nodes, rootNodeId, writingGuide = '', writingGuideChatHistory = [], trashedNodes = []) =>
+        set({ nodes, rootNodeId, selectedNodeId: rootNodeId, editingNodeId: null, isGenerating: false, projectWritingGuide: writingGuide, writingGuideChatHistory, trashedNodes, undoStack: [], redoStack: [] }),
 
       initRootNode: () => {
         if (get().rootNodeId && get().nodes[get().rootNodeId!]) return
@@ -142,19 +160,41 @@ export const useStore = create<AppStore>()(
 
       deleteNode: (nodeId) => {
         if (nodeId === get().rootNodeId) return
-        const allNodes = get().nodes
+        const { nodes: allNodes, rootNodeId, trashedNodes, undoStack } = get()
+
+        // Snapshot for undo
+        const snapshot = { nodes: allNodes, rootNodeId, trashedNodes }
+
+        // Collect subtree
         const toDelete = new Set<string>()
         const collect = (id: string) => {
           toDelete.add(id)
           Object.values(allNodes).filter((n) => n.parentId === id).forEach((n) => collect(n.id))
         }
         collect(nodeId)
+
+        const deletedNodes: Record<string, StoryNodeData> = {}
+        toDelete.forEach((id) => { deletedNodes[id] = allNodes[id] })
+
+        const trashEntry: TrashedNodeGroup = {
+          id: genId(),
+          nodes: deletedNodes,
+          rootId: nodeId,
+          originalParentId: allNodes[nodeId]?.parentId ?? null,
+          deletedAt: Date.now(),
+          title: allNodes[nodeId]?.title ?? '未知节点',
+        }
+
         const newNodes = { ...allNodes }
         toDelete.forEach((id) => delete newNodes[id])
+
         set((s) => ({
           nodes: newNodes,
-          selectedNodeId: s.selectedNodeId && toDelete.has(s.selectedNodeId) ? get().rootNodeId : s.selectedNodeId,
+          trashedNodes: [...trashedNodes, trashEntry],
+          selectedNodeId: s.selectedNodeId && toDelete.has(s.selectedNodeId) ? rootNodeId : s.selectedNodeId,
           editingNodeId: s.editingNodeId && toDelete.has(s.editingNodeId) ? null : s.editingNodeId,
+          undoStack: [...undoStack.slice(-29), snapshot],
+          redoStack: [],
         }))
       },
 
@@ -246,6 +286,67 @@ export const useStore = create<AppStore>()(
       addWritingGuideChatMessage: (msg) =>
         set((s) => ({ writingGuideChatHistory: [...s.writingGuideChatHistory, msg] })),
       setWritingGuideChatHistory: (msgs) => set({ writingGuideChatHistory: msgs }),
+      setAutoSave: (v) => set({ autoSave: v }),
+
+      pushUndoSnapshot: () => {
+        const { nodes, rootNodeId, trashedNodes, undoStack } = get()
+        set({ undoStack: [...undoStack.slice(-29), { nodes, rootNodeId, trashedNodes }], redoStack: [] })
+      },
+
+      undo: () => {
+        const { undoStack, nodes, rootNodeId, trashedNodes, redoStack } = get()
+        if (undoStack.length === 0) return
+        const prev = undoStack[undoStack.length - 1]
+        const current = { nodes, rootNodeId, trashedNodes }
+        set({
+          nodes: prev.nodes,
+          rootNodeId: prev.rootNodeId,
+          trashedNodes: prev.trashedNodes,
+          undoStack: undoStack.slice(0, -1),
+          redoStack: [...redoStack.slice(-29), current],
+        })
+      },
+
+      redo: () => {
+        const { redoStack, nodes, rootNodeId, trashedNodes, undoStack } = get()
+        if (redoStack.length === 0) return
+        const next = redoStack[redoStack.length - 1]
+        const current = { nodes, rootNodeId, trashedNodes }
+        set({
+          nodes: next.nodes,
+          rootNodeId: next.rootNodeId,
+          trashedNodes: next.trashedNodes,
+          undoStack: [...undoStack.slice(-29), current],
+          redoStack: redoStack.slice(0, -1),
+        })
+      },
+
+      restoreNodeGroup: (trashId) => {
+        const { trashedNodes, nodes, rootNodeId, undoStack } = get()
+        const group = trashedNodes.find((g) => g.id === trashId)
+        if (!group) return
+        const snapshot = { nodes, rootNodeId, trashedNodes }
+        // Re-attach: if original parent still exists, use it; else attach to root
+        const parentId = group.originalParentId && nodes[group.originalParentId]
+          ? group.originalParentId
+          : rootNodeId
+        // Update parentId of the root of the group
+        const restoredNodes = { ...group.nodes }
+        if (restoredNodes[group.rootId]) {
+          restoredNodes[group.rootId] = { ...restoredNodes[group.rootId], parentId }
+        }
+        set({
+          nodes: { ...nodes, ...restoredNodes },
+          trashedNodes: trashedNodes.filter((g) => g.id !== trashId),
+          undoStack: [...undoStack.slice(-29), snapshot],
+          redoStack: [],
+        })
+      },
+
+      permanentDeleteNodeGroup: (trashId) => {
+        set((s) => ({ trashedNodes: s.trashedNodes.filter((g) => g.id !== trashId) }))
+      },
+
       setApiKey: (key) => set({ apiKey: key }),
       setApiUrl: (url) => set({ apiUrl: url }),
       setApiFormat: (fmt) => set({ apiFormat: fmt }),
@@ -276,6 +377,7 @@ export const useStore = create<AppStore>()(
         rootNodeId: get().rootNodeId,
         writingGuide: get().projectWritingGuide,
         writingGuideChatHistory: get().writingGuideChatHistory,
+        trashedNodes: get().trashedNodes,
       }),
     }),
     {
@@ -290,6 +392,7 @@ export const useStore = create<AppStore>()(
         editorFontSize: s.editorFontSize,
         editorLineHeight: s.editorLineHeight,
         editorLetterSpacing: s.editorLetterSpacing,
+        autoSave: s.autoSave,
       }),
     },
   ),

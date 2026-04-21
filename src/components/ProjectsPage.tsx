@@ -7,7 +7,7 @@ import CreateProjectModal from './CreateProjectModal'
 import BulkExportModal from './BulkExportModal'
 
 export default function ProjectsPage() {
-  const { projects, openProject, deleteProject, importProjects, isLoading } = useProjectStore()
+  const { projects, openProject, deleteProject, restoreProject, permanentDeleteProject, importProjects, isLoading } = useProjectStore()
   const { resetWithProjectData, initRootNode } = useStore()
 
   const [unlocking, setUnlocking] = useState<ProjectMeta | null>(null)
@@ -20,6 +20,11 @@ export default function ProjectsPage() {
   const [deleting, setDeleting] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState('')
+  const [showTrash, setShowTrash] = useState(false)
+  const [permanentDeleting, setPermanentDeleting] = useState<string | null>(null)
+
+  const activeProjects = projects.filter((p) => !p.deletedAt)
+  const trashedProjects = projects.filter((p) => p.deletedAt)
 
   const handleOpen = async (meta: ProjectMeta) => {
     if (multiMode) {
@@ -55,9 +60,9 @@ export default function ProjectsPage() {
           foreshadowingCounter: node.foreshadowingCounter ?? (nid === data.rootNodeId ? (data.foreshadowingCounter ?? 0) : 0),
         }])
       )
-      resetWithProjectData(migratedNodes, data.rootNodeId, data.writingGuide ?? '', data.writingGuideChatHistory ?? [])
+      resetWithProjectData(migratedNodes, data.rootNodeId, data.writingGuide ?? '', data.writingGuideChatHistory ?? [], data.trashedNodes ?? [])
     } else {
-      resetWithProjectData({}, null, '', [])
+      resetWithProjectData({}, null, '', [], [])
       initRootNode()
     }
     setUnlocking(null)
@@ -169,7 +174,7 @@ export default function ProjectsPage() {
             </button>
 
             {/* Project cards */}
-            {projects.map((meta) => (
+            {activeProjects.map((meta) => (
               <ProjectCard
                 key={meta.id}
                 meta={meta}
@@ -204,6 +209,86 @@ export default function ProjectsPage() {
               style={{ border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
               取消选择
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Project trash section */}
+      {trashedProjects.length > 0 && (
+        <div className="flex-shrink-0 px-8 pb-6">
+          <button
+            onClick={() => setShowTrash((v) => !v)}
+            className="flex items-center gap-2 mb-3 transition-all hover:opacity-80"
+            style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+              <path d="M2 3h8M4.5 3V2h3v1M3 3l.5 7h5l.5-7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            回收站 ({trashedProjects.length})
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="none" style={{ transform: showTrash ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>
+              <path d="M2 1l4 3-4 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+            </svg>
+          </button>
+          {showTrash && (
+            <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}>
+              {trashedProjects.map((meta) => {
+                const ago = formatProjectTimeAgo(meta.deletedAt!)
+                return (
+                  <div
+                    key={meta.id}
+                    className="rounded px-4 py-3"
+                    style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', opacity: 0.7 }}>
+                    <h3 className="font-serif text-sm mb-1 truncate" style={{ color: 'var(--text-primary)' }}>
+                      {meta.name}
+                    </h3>
+                    <p style={{ color: 'var(--text-muted)', fontSize: '10px', marginBottom: '8px' }}>
+                      {meta.nodeCount} 节点 · 删除于 {ago}
+                    </p>
+                    <div className="flex gap-1.5">
+                      <button
+                        onClick={() => restoreProject(meta.id)}
+                        className="px-2.5 py-1 rounded text-xs hover:opacity-80"
+                        style={{ color: 'rgba(80,160,80,0.9)', border: '1px solid rgba(80,160,80,0.3)', fontSize: '10px' }}>
+                        恢复
+                      </button>
+                      <button
+                        onClick={() => setPermanentDeleting(meta.id)}
+                        className="px-2.5 py-1 rounded text-xs hover:opacity-80"
+                        style={{ color: 'rgba(200,80,80,0.6)', border: '1px solid rgba(200,80,80,0.2)', fontSize: '10px' }}>
+                        彻底删除
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Permanent delete confirmation */}
+      {permanentDeleting && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ background: 'rgba(10,9,18,0.85)', backdropFilter: 'blur(6px)' }}
+          onClick={() => setPermanentDeleting(null)}>
+          <div className="w-full max-w-sm p-8 rounded"
+            style={{ background: 'var(--bg-card)', border: '1px solid rgba(200,80,80,0.3)', boxShadow: '0 24px 64px rgba(0,0,0,0.6)' }}
+            onClick={(e) => e.stopPropagation()}>
+            <h2 className="font-serif text-xl mb-2" style={{ color: 'var(--text-primary)' }}>彻底删除</h2>
+            <p className="text-sm mb-6" style={{ color: 'var(--text-muted)' }}>
+              永久删除「{projects.find(p => p.id === permanentDeleting)?.name}」？此操作不可撤销。
+            </p>
+            <div className="flex gap-3">
+              <button onClick={async () => { await permanentDeleteProject(permanentDeleting!); setPermanentDeleting(null) }}
+                className="flex-1 py-2.5 rounded text-sm font-medium"
+                style={{ background: 'rgba(200,60,60,0.2)', color: 'rgba(220,80,80,0.9)', border: '1px solid rgba(200,80,80,0.3)' }}>
+                永久删除
+              </button>
+              <button onClick={() => setPermanentDeleting(null)}
+                className="px-4 py-2.5 rounded text-sm"
+                style={{ border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
+                取消
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -256,13 +341,13 @@ export default function ProjectsPage() {
             onClick={(e) => e.stopPropagation()}>
             <h2 className="font-serif text-xl mb-2" style={{ color: 'var(--text-primary)' }}>删除项目</h2>
             <p className="text-sm mb-6" style={{ color: 'var(--text-muted)' }}>
-              确认删除「{projects.find(p => p.id === deleting)?.name}」？此操作不可撤销。
+              将「{projects.find(p => p.id === deleting)?.name}」移到回收站？可随时恢复。
             </p>
             <div className="flex gap-3">
               <button onClick={() => handleDelete(deleting!)}
                 className="flex-1 py-2.5 rounded text-sm font-medium"
                 style={{ background: 'rgba(200,60,60,0.15)', color: 'rgba(220,80,80,0.9)', border: '1px solid rgba(200,80,80,0.3)' }}>
-                确认删除
+                移到回收站
               </button>
               <button onClick={() => setDeleting(null)}
                 className="px-4 py-2.5 rounded text-sm"
@@ -282,6 +367,17 @@ export default function ProjectsPage() {
       )}
     </div>
   )
+}
+
+function formatProjectTimeAgo(ts: number): string {
+  const diff = Date.now() - ts
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return '刚刚'
+  if (mins < 60) return `${mins} 分钟前`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours} 小时前`
+  const days = Math.floor(hours / 24)
+  return `${days} 天前`
 }
 
 // ── Project card ────────────────────────────────────────────────────────────

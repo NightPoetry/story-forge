@@ -7,7 +7,7 @@ import {
   importJsonFile, buildStoryChainText, initStorage,
 } from './storage'
 import {
-  ChatMessage, FullProjectData, ProjectMeta, SingleBackupFile, MultiBackupFile, StoryNodeData,
+  ChatMessage, FullProjectData, ProjectMeta, SingleBackupFile, MultiBackupFile, StoryNodeData, TrashedNodeGroup,
 } from './types'
 import { genId } from './api'
 
@@ -24,8 +24,10 @@ interface ProjectStore {
   openProject: (id: string, password?: string) => Promise<'ok' | 'wrong-password' | 'needs-password'>
   closeProject: () => Promise<void>
   deleteProject: (id: string) => Promise<void>
+  restoreProject: (id: string) => Promise<void>
+  permanentDeleteProject: (id: string) => Promise<void>
   renameProject: (id: string, name: string) => Promise<void>
-  saveProjectData: (projectId: string, nodes: FullProjectData['nodes'], rootNodeId: string | null, writingGuide?: string, writingGuideChatHistory?: ChatMessage[]) => Promise<void>
+  saveProjectData: (projectId: string, nodes: FullProjectData['nodes'], rootNodeId: string | null, writingGuide?: string, writingGuideChatHistory?: ChatMessage[], trashedNodes?: TrashedNodeGroup[]) => Promise<void>
 
   // Export
   exportProjectBackup: (projectId: string, currentNodes?: FullProjectData['nodes'], rootNodeId?: string | null) => Promise<void>
@@ -60,7 +62,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
     const passwordHash = password ? await hashPassword(password) : null
 
     const meta: ProjectMeta = { id, name, passwordHash, createdAt: now, updatedAt: now, nodeCount: 0 }
-    const data: FullProjectData = { id, name, passwordHash, nodes: {}, rootNodeId: null, writingGuide: '', writingGuideChatHistory: [], createdAt: now, updatedAt: now }
+    const data: FullProjectData = { id, name, passwordHash, nodes: {}, rootNodeId: null, writingGuide: '', writingGuideChatHistory: [], trashedNodes: [], createdAt: now, updatedAt: now }
 
     await writeProjectData(data)
 
@@ -89,13 +91,23 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
   },
 
   deleteProject: async (id) => {
+    const now = Date.now()
+    const updated = get().projects.map((p) => p.id === id ? { ...p, deletedAt: now } : p)
+    await writeProjectIndex(updated)
+    set({ projects: updated })
+  },
+
+  restoreProject: async (id) => {
+    const updated = get().projects.map((p) => p.id === id ? { ...p, deletedAt: undefined } : p)
+    await writeProjectIndex(updated)
+    set({ projects: updated })
+  },
+
+  permanentDeleteProject: async (id) => {
     await deleteProjectData(id)
     const updated = get().projects.filter((p) => p.id !== id)
     await writeProjectIndex(updated)
-    set((s) => ({
-      projects: updated,
-      currentProjectId: s.currentProjectId === id ? null : s.currentProjectId,
-    }))
+    set({ projects: updated })
   },
 
   renameProject: async (id, name) => {
@@ -107,7 +119,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
     if (data) await writeProjectData({ ...data, name })
   },
 
-  saveProjectData: async (projectId, nodes, rootNodeId, writingGuide = '', writingGuideChatHistory = []) => {
+  saveProjectData: async (projectId, nodes, rootNodeId, writingGuide = '', writingGuideChatHistory = [], trashedNodes = []) => {
     const meta = get().projects.find((p) => p.id === projectId)
     if (!meta) return
 
@@ -121,6 +133,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
       rootNodeId,
       writingGuide,
       writingGuideChatHistory,
+      trashedNodes: trashedNodes ?? [],
       createdAt: meta.createdAt,
       updatedAt: now,
     }

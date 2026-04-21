@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from './store'
 import { useProjectStore } from './projectStore'
 import { ApiFormat } from './types'
@@ -7,6 +7,7 @@ import GlobalSettings from './components/GlobalSettings'
 import NodeGraph from './components/NodeGraph'
 import NodeEditor from './components/NodeEditor'
 import ProjectsPage from './components/ProjectsPage'
+import NodeTrashPanel from './components/NodeTrashPanel'
 
 const FORMAT_DEFAULTS: Record<ApiFormat, { url: string; model: string }> = {
   anthropic: { url: 'https://api.anthropic.com', model: 'claude-sonnet-4-6' },
@@ -19,16 +20,17 @@ export default function App() {
     setApiKey, setApiUrl, setApiFormat, setApiModel,
     nodes, rootNodeId, editingNodeId,
     projectWritingGuide, writingGuideChatHistory,
+    trashedNodes, autoSave, undo, redo,
   } = useStore()
 
-  const { init, view, currentProjectId, saveProjectData } = useProjectStore()
+  const { init, view, currentProjectId, saveProjectData, closeProject } = useProjectStore()
 
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState({ key: '', url: '', model: '', format: 'anthropic' as ApiFormat })
+  const [isDirty, setIsDirty] = useState(false)
+  const [showNodeTrash, setShowNodeTrash] = useState(false)
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const guideSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const prevNodes = useRef(nodes)
 
   // Init project store on mount
   useEffect(() => { init() }, [])
@@ -36,26 +38,58 @@ export default function App() {
   // Show API key modal if not configured
   useEffect(() => { if (!apiKey) setModalOpen(true) }, [apiKey])
 
-  // Auto-save when story nodes change (debounced 1.5s)
-  useEffect(() => {
-    if (!currentProjectId || nodes === prevNodes.current) return
-    prevNodes.current = nodes
-    if (saveTimer.current) clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => {
-      saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, writingGuideChatHistory)
-    }, 1500)
-    return () => { if (saveTimer.current) clearTimeout(saveTimer.current) }
-  }, [nodes, currentProjectId, rootNodeId, projectWritingGuide, writingGuideChatHistory])
-
-  // Auto-save when guide content or guide chat history changes (debounced 1.5s)
+  // Auto-save: debounced 1.5s, watches all project data
   useEffect(() => {
     if (!currentProjectId) return
-    if (guideSaveTimer.current) clearTimeout(guideSaveTimer.current)
-    guideSaveTimer.current = setTimeout(() => {
-      saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, writingGuideChatHistory)
+    setIsDirty(true)
+    if (!autoSave) return
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(async () => {
+      await saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, writingGuideChatHistory, trashedNodes)
+      setIsDirty(false)
     }, 1500)
-    return () => { if (guideSaveTimer.current) clearTimeout(guideSaveTimer.current) }
-  }, [projectWritingGuide, writingGuideChatHistory])
+    return () => { if (saveTimer.current) clearTimeout(saveTimer.current) }
+  }, [nodes, rootNodeId, projectWritingGuide, writingGuideChatHistory, trashedNodes, currentProjectId, autoSave])
+
+  // Manual save
+  const handleManualSave = useCallback(async () => {
+    if (!currentProjectId) return
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    await saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, writingGuideChatHistory, trashedNodes)
+    setIsDirty(false)
+  }, [currentProjectId, nodes, rootNodeId, projectWritingGuide, writingGuideChatHistory, trashedNodes])
+
+  // Back to projects
+  const handleBack = useCallback(async () => {
+    if (currentProjectId) {
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      await saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, writingGuideChatHistory, trashedNodes)
+      setIsDirty(false)
+    }
+    await closeProject()
+  }, [currentProjectId, nodes, rootNodeId, projectWritingGuide, writingGuideChatHistory, trashedNodes])
+
+  // Keyboard shortcuts: Ctrl+S, Ctrl+Z, Ctrl+R, Ctrl+Shift+Z
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return
+      if (e.key === 's') {
+        e.preventDefault()
+        handleManualSave()
+      }
+      const inEditable = document.activeElement?.tagName === 'TEXTAREA' || document.activeElement?.tagName === 'INPUT'
+      if (e.key === 'z' && !e.shiftKey && !inEditable) {
+        e.preventDefault()
+        undo()
+      }
+      if ((e.key === 'r' || (e.key === 'z' && e.shiftKey)) && !inEditable) {
+        e.preventDefault()
+        redo()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [handleManualSave, undo, redo])
 
   const openModal = () => {
     setForm({ key: apiKey, url: apiUrl, model: apiModel, format: apiFormat })
@@ -80,11 +114,54 @@ export default function App() {
         <ProjectsPage />
       ) : (
         <>
-          <Toolbar onOpenApiSettings={openModal} />
+          <Toolbar
+            onOpenApiSettings={openModal}
+            isDirty={isDirty}
+            onManualSave={handleManualSave}
+            onBack={handleBack}
+          />
           <div className="flex-1 relative overflow-hidden">
             <NodeGraph />
             {editingNodeId && <NodeEditor nodeId={editingNodeId} />}
             <GlobalSettings />
+            {showNodeTrash && <NodeTrashPanel onClose={() => setShowNodeTrash(false)} />}
+
+            {/* Floating trash button — bottom-right, gold circle */}
+            <button
+              onClick={() => setShowNodeTrash(true)}
+              title="节点回收站"
+              className="absolute flex items-center justify-center rounded-full transition-all hover:scale-105"
+              style={{
+                bottom: '20px',
+                right: '20px',
+                width: '40px',
+                height: '40px',
+                background: trashedNodes.length > 0 ? 'rgba(201,169,110,0.15)' : 'rgba(201,169,110,0.08)',
+                border: '1px solid var(--border-gold)',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
+                zIndex: 5,
+              }}>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M3 4.5h10M5.5 4.5V3.5h5v1M4 4.5l.6 9h6.8l.6-9" stroke="var(--gold)" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M6.5 7v4M9.5 7v4" stroke="var(--gold)" strokeWidth="1" strokeLinecap="round" />
+              </svg>
+              {trashedNodes.length > 0 && (
+                <span
+                  className="absolute flex items-center justify-center rounded-full"
+                  style={{
+                    top: '-3px',
+                    right: '-3px',
+                    width: '16px',
+                    height: '16px',
+                    background: 'var(--gold)',
+                    color: '#0e0d15',
+                    fontSize: '9px',
+                    fontWeight: 700,
+                  }}>
+                  {trashedNodes.length}
+                </span>
+              )}
+            </button>
           </div>
         </>
       )}
