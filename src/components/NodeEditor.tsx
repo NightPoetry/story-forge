@@ -61,27 +61,6 @@ export default function NodeEditor({ nodeId }: Props) {
           </div>
 
           <div className="flex items-center gap-1.5 flex-shrink-0">
-            {/* Writing guide button */}
-            <button
-              onClick={openGuide}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs transition-all hover:opacity-80"
-              style={{
-                color: projectWritingGuide.trim() ? 'rgba(120,180,120,0.9)' : 'var(--text-muted)',
-                border: `1px solid ${projectWritingGuide.trim() ? 'rgba(80,160,80,0.3)' : 'var(--border-subtle)'}`,
-                fontSize: '11px',
-              }}>
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                <path d="M2 2h6M2 5h4M2 8h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-              </svg>
-              故事设定
-              {projectWritingGuide.trim() && (
-                <span className="w-1 h-1 rounded-full flex-shrink-0"
-                  style={{ background: 'rgba(80,160,80,0.8)' }} />
-              )}
-            </button>
-
-            <div style={{ width: '1px', height: '16px', background: 'var(--border-subtle)', margin: '0 2px' }} />
-
             <button
               onClick={handleContinue}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs transition-all hover:opacity-80"
@@ -108,7 +87,32 @@ export default function NodeEditor({ nodeId }: Props) {
               </svg>
               派生分支
             </button>
+
             <div style={{ width: '1px', height: '16px', background: 'var(--border-subtle)', margin: '0 4px' }} />
+
+            {/* Writing guide — gold/鎏金 styling, project-level */}
+            <button
+              onClick={openGuide}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded text-xs transition-all hover:opacity-85"
+              style={{
+                color: 'var(--gold)',
+                border: '1px solid var(--border-gold)',
+                background: projectWritingGuide.trim() ? 'rgba(201,169,110,0.08)' : 'transparent',
+                fontSize: '11px',
+                fontWeight: 500,
+              }}>
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <path d="M2 2h6M2 5h4M2 8h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+              </svg>
+              故事设定
+              {projectWritingGuide.trim() && (
+                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                  style={{ background: 'var(--gold)', opacity: 0.7 }} />
+              )}
+            </button>
+
+            <div style={{ width: '1px', height: '16px', background: 'var(--border-subtle)', margin: '0 2px' }} />
+
             <button
               onClick={() => setEditingNode(null)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs transition-all hover:opacity-70"

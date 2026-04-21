@@ -25,6 +25,15 @@ export interface ForeshadowingItem {
   revealNote?: string   // How it was revealed in the story
 }
 
+export interface TrashedNodeGroup {
+  id: string
+  nodes: Record<string, StoryNodeData>
+  rootId: string
+  originalParentId: string | null
+  deletedAt: number
+  title: string
+}
+
 export interface StoryNodeData {
   id: string
   title: string
@@ -48,6 +57,7 @@ export interface ProjectMeta {
   createdAt: number
   updatedAt: number
   nodeCount: number
+  deletedAt?: number
 }
 
 export interface FullProjectData {
@@ -58,6 +68,7 @@ export interface FullProjectData {
   rootNodeId: string | null
   writingGuide: string
   writingGuideChatHistory?: ChatMessage[]
+  trashedNodes?: TrashedNodeGroup[]
   // Legacy fields kept for reading old saves
   foreshadowings?: ForeshadowingItem[]
   foreshadowingCounter?: number

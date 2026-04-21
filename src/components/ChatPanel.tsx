@@ -25,7 +25,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     getAncestorChain, globalSettings, projectWritingGuide,
     apiKey, apiUrl, apiFormat, apiModel,
     isGenerating, setIsGenerating,
-    collectForeshadowing,
+    collectForeshadowing, pushUndoSnapshot,
   } = useStore()
 
   const node = nodes[nodeId]
@@ -56,7 +56,8 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     }
     addChatMessage(nodeId, userMsg)
 
-    // Snapshot state for rollback if generation fails
+    // Undo snapshot + rollback snapshot
+    pushUndoSnapshot()
     const prevStoryContent = node.storyContent
     const prevStateCard = { ...node.stateCard }
 

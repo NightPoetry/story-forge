@@ -5,24 +5,25 @@ import ExportModal from './ExportModal'
 
 interface Props {
   onOpenApiSettings: () => void
+  isDirty: boolean
+  onManualSave: () => void
+  onBack: () => void
 }
 
-export default function Toolbar({ onOpenApiSettings }: Props) {
-  const { apiKey, apiFormat, apiModel, isGenerating, setIsGlobalSettingsOpen, editingNodeId } = useStore()
-  const { projects, currentProjectId, closeProject, saveProjectData } = useProjectStore()
+export default function Toolbar({
+  onOpenApiSettings, isDirty, onManualSave, onBack,
+}: Props) {
+  const {
+    apiKey, apiFormat, apiModel, isGenerating,
+    setIsGlobalSettingsOpen, editingNodeId,
+    autoSave, setAutoSave, undoStack, redoStack,
+  } = useStore()
+  const { projects, currentProjectId } = useProjectStore()
 
   const [showExport, setShowExport] = useState(false)
 
   const project = projects.find((p) => p.id === currentProjectId)
   const modelShort = apiModel.length > 20 ? apiModel.slice(0, 18) + '…' : apiModel
-
-  const handleBack = async () => {
-    const { nodes, rootNodeId, projectWritingGuide } = useStore.getState()
-    if (currentProjectId) {
-      await saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide)
-    }
-    await closeProject()
-  }
 
   return (
     <>
@@ -37,7 +38,7 @@ export default function Toolbar({ onOpenApiSettings }: Props) {
         <div className="flex items-center gap-3">
           {/* Back to projects */}
           <button
-            onClick={handleBack}
+            onClick={onBack}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs transition-all hover:opacity-80"
             style={{ color: 'var(--text-muted)', border: '1px solid var(--border-subtle)' }}>
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
@@ -63,6 +64,23 @@ export default function Toolbar({ onOpenApiSettings }: Props) {
             {project?.name ?? '叙事工坊'}
           </span>
 
+          {/* Save indicator */}
+          <button
+            onClick={isDirty ? onManualSave : undefined}
+            title={isDirty ? (autoSave ? '正在等待自动保存… 点击立即保存' : '有未保存的更改，点击或 Ctrl+S 保存') : '所有更改已保存'}
+            className="flex items-center gap-1.5 ml-1 transition-all"
+            style={{ cursor: isDirty ? 'pointer' : 'default' }}>
+            <div
+              className="w-2 h-2 rounded-full flex-shrink-0 transition-all duration-300"
+              style={{
+                background: isDirty ? 'rgba(200,80,80,0.8)' : 'rgba(80,160,80,0.8)',
+                boxShadow: isDirty ? '0 0 6px rgba(200,80,80,0.3)' : 'none',
+              }} />
+            {isDirty && !autoSave && (
+              <span style={{ color: 'rgba(200,80,80,0.6)', fontSize: '10px' }}>Ctrl+S</span>
+            )}
+          </button>
+
           {isGenerating && (
             <span className="text-xs generating-pulse" style={{ color: 'var(--gold)', fontSize: '11px' }}>
               生成中…
@@ -72,6 +90,24 @@ export default function Toolbar({ onOpenApiSettings }: Props) {
 
         {/* Right */}
         <div className="flex items-center gap-2">
+          {/* Auto-save toggle */}
+          <button
+            onClick={() => setAutoSave(!autoSave)}
+            title={autoSave ? '自动保存已开启，点击关闭' : '自动保存已关闭，点击开启'}
+            className="flex items-center gap-1 px-2 py-1.5 rounded text-xs transition-all hover:opacity-80"
+            style={{
+              color: autoSave ? 'rgba(80,160,80,0.7)' : 'var(--text-muted)',
+              border: `1px solid ${autoSave ? 'rgba(80,160,80,0.25)' : 'var(--border-subtle)'}`,
+              fontSize: '10px',
+            }}>
+            <svg width="9" height="9" viewBox="0 0 10 10" fill="none">
+              <path d="M2 1h6l1 1v6l-1 1H2L1 8V2l1-1z" stroke="currentColor" strokeWidth="1.2" />
+              <path d="M3 1v3h4V1" stroke="currentColor" strokeWidth="1" />
+              <rect x="3" y="6" width="4" height="2" rx="0.5" stroke="currentColor" strokeWidth="0.8" />
+            </svg>
+            自动
+          </button>
+
           {/* Export */}
           {editingNodeId && (
             <button
