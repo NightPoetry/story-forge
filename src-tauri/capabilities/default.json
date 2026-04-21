@@ -4,7 +4,14 @@
   "windows": ["main"],
   "webviews": ["main"],
   "remote": {
-    "urls": ["http://localhost:*", "http://127.0.0.1:*"]
+    "urls": [
+      "http://localhost:*",
+      "http://127.0.0.1:*",
+      "https://api.anthropic.com/*",
+      "https://*.anthropic.com/*",
+      "https://api.openai.com/*",
+      "https://*"
+    ]
   },
   "local": true,
   "permissions": [
