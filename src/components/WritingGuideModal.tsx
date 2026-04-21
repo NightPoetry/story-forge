@@ -128,7 +128,7 @@ export default function WritingGuideModal({ onClose }: Props) {
 
   return (
     <div
-      className="absolute inset-0 z-30 flex items-center justify-center"
+      className="fixed inset-0 z-30 flex items-center justify-center"
       style={{ background: 'rgba(10,9,18,0.75)', backdropFilter: 'blur(4px)' }}
       onClick={onClose}>
       <div
