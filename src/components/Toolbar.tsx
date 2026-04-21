@@ -32,8 +32,7 @@ export default function Toolbar({
         style={{
           background: 'var(--bg-primary)',
           borderBottom: '1px solid var(--border-subtle)',
-          zIndex: 20,
-          position: 'relative',
+          zIndex: 10,
         }}>
         {/* Left */}
         <div className="flex items-center gap-3">
