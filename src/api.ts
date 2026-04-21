@@ -220,6 +220,10 @@ export type AIAction =
   | { type: 'chat_reply'; content: string }
   | { type: 'collect_foreshadowing'; id: string; revealNote: string }
 
+export type AIGuideAction =
+  | { type: 'update_guide'; content: string }
+  | { type: 'chat_reply'; content: string }
+
 // ── Request helpers ────────────────────────────────────────────────────────
 
 interface ApiConfig {
@@ -558,6 +562,184 @@ async function runOpenAIPlainFallback(
   if (!signal?.aborted) {
     onAction({ type: 'write_story', content: full })
     onAction({ type: 'chat_reply', content: '已根据指示更新故事内容。' })
+    onComplete()
+  }
+}
+
+// ── Settings guide chat ────────────────────────────────────────────────────
+
+const GUIDE_TOOLS = [
+  {
+    name: 'update_guide',
+    description: '将对话中获得的故事信息整理为结构化设定文档并更新。有新信息时即可调用，不必等到完整。',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        content: { type: 'string', description: '完整设定文档，仅记录已确认的内容，格式清晰简洁' },
+      },
+      required: ['content'],
+    },
+  },
+  {
+    name: 'chat_reply',
+    description: '向作者发送引导性消息（提问、确认、建议等），每次响应必须调用。',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        message: { type: 'string', description: '1-3句自然对话，通常以一个引导性问题结尾' },
+      },
+      required: ['message'],
+    },
+  },
+] as const
+
+function buildGuideSystemPrompt(currentGuide: string): string {
+  return `你是故事创作顾问，通过对话帮助作者完善故事设定文档。
+
+工作方式：
+- 每次只问一个核心问题，根据作者的回答适时深入或转向
+- 获得有效信息后立即调用 update_guide 整理到文档中
+- 每次响应必须调用 chat_reply
+- 语气自然亲切，像在和创作伙伴讨论
+
+引导优先级（按顺序推进，已知信息跳过）：
+1. 故事类型与基本构想
+2. 时代、世界与背景规则
+3. 主角及关键人物
+4. 核心冲突与故事方向
+5. 叙事视角与文风基调
+
+update_guide 要求：仅写已确认内容，可用标签【类型】【背景】【人物】【冲突】【文风】【其他】
+
+当前设定文档：
+${currentGuide.trim() || '（尚无内容）'}`
+}
+
+export async function runSettingsGuideChat(
+  cfg: ApiConfig,
+  currentGuide: string,
+  messages: { role: 'user' | 'assistant'; content: string }[],
+  onAction: (action: AIGuideAction) => void,
+  onComplete: () => void,
+  onError: (err: string) => void,
+  signal?: AbortSignal,
+  onStreamDelta?: (toolName: string, text: string) => void,
+): Promise<void> {
+  const systemPrompt = buildGuideSystemPrompt(currentGuide)
+  type ToolDef = { name: string; description: string; input_schema: { type: 'object'; properties: Record<string, unknown>; required: string[] } }
+  const tools = [...GUIDE_TOOLS] as unknown as ToolDef[]
+
+  if (cfg.apiFormat === 'anthropic') {
+    const base = resolveAnthropicBase(cfg.apiUrl)
+    let res: Response
+    try {
+      res = await fetch(`${base}/v1/messages`, {
+        method: 'POST',
+        headers: anthropicHeaders(cfg.apiKey),
+        signal,
+        body: JSON.stringify({ model: cfg.apiModel, max_tokens: 2048, stream: true, system: systemPrompt, messages, tools }),
+      })
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') return
+      onError(e instanceof Error ? e.message : 'Network error')
+      return
+    }
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}))
+      onError((errBody as { error?: { message?: string } }).error?.message || `HTTP ${res.status}`)
+      return
+    }
+
+    const reader = res.body!.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    type BlockInfo = { name: string; buf: string }
+    const blocks = new Map<number, BlockInfo>()
+    let hasChatReply = false
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (signal?.aborted) { reader.cancel(); break }
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() ?? ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const raw = line.slice(6).trim()
+          if (!raw) continue
+          let evt: Record<string, unknown>
+          try { evt = JSON.parse(raw) as Record<string, unknown> } catch { continue }
+          const evtType = evt.type as string
+          if (evtType === 'content_block_start') {
+            const block = evt.content_block as { type: string; name?: string } | undefined
+            if (block?.type === 'tool_use' && block.name) blocks.set(evt.index as number, { name: block.name, buf: '' })
+          }
+          if (evtType === 'content_block_delta') {
+            const delta = evt.delta as { type: string; partial_json?: string } | undefined
+            if (delta?.type === 'input_json_delta' && delta.partial_json) {
+              const block = blocks.get(evt.index as number)
+              if (block) {
+                block.buf += delta.partial_json
+                if (onStreamDelta && block.name === 'update_guide') {
+                  const text = extractPartialStringValue(block.buf, 'content')
+                  if (text !== null) onStreamDelta('update_guide', text)
+                }
+              }
+            }
+          }
+          if (evtType === 'content_block_stop') {
+            const block = blocks.get(evt.index as number)
+            if (block) {
+              try {
+                const input = JSON.parse(block.buf) as Record<string, string>
+                if (block.name === 'update_guide') {
+                  onAction({ type: 'update_guide', content: input.content ?? '' })
+                } else if (block.name === 'chat_reply') {
+                  onAction({ type: 'chat_reply', content: input.message ?? '' })
+                  hasChatReply = true
+                }
+              } catch { /* ignore parse error */ }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') onError(e instanceof Error ? e.message : 'Stream error')
+      return
+    }
+
+    if (!hasChatReply && !signal?.aborted) onAction({ type: 'chat_reply', content: '已记录。' })
+    if (!signal?.aborted) onComplete()
+  } else {
+    // OpenAI non-streaming path
+    const base = cfg.apiUrl.replace(/\/$/, '')
+    const openAITools = tools.map((t) => ({ type: 'function' as const, function: { name: t.name, description: t.description, parameters: t.input_schema } }))
+    let res: Response
+    try {
+      res = await fetch(`${base}/v1/chat/completions`, {
+        method: 'POST', headers: openaiHeaders(cfg.apiKey), signal,
+        body: JSON.stringify({ model: cfg.apiModel, messages: [{ role: 'system', content: systemPrompt }, ...messages], tools: openAITools, tool_choice: 'auto' }),
+      })
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') return
+      onError(e instanceof Error ? e.message : 'Network error')
+      return
+    }
+    if (!res.ok) { onError(`HTTP ${res.status}`); return }
+    type ToolCall = { function: { name: string; arguments: string } }
+    type OAIResponse = { choices?: { message: { tool_calls?: ToolCall[]; content?: string } }[] }
+    const data = await res.json() as OAIResponse
+    let hasChatReply = false
+    for (const tc of data.choices?.[0]?.message.tool_calls ?? []) {
+      try {
+        const args = JSON.parse(tc.function.arguments) as Record<string, string>
+        if (tc.function.name === 'update_guide') onAction({ type: 'update_guide', content: args.content ?? '' })
+        else if (tc.function.name === 'chat_reply') { onAction({ type: 'chat_reply', content: args.message ?? '' }); hasChatReply = true }
+      } catch { /* ignore */ }
+    }
+    if (!hasChatReply) onAction({ type: 'chat_reply', content: '已记录。' })
     onComplete()
   }
 }

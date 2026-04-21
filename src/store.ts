@@ -34,6 +34,7 @@ interface AppStore {
   editingNodeId: string | null
   isGenerating: boolean
   projectWritingGuide: string
+  writingGuideChatHistory: ChatMessage[]
 
   // Settings (persisted in localStorage)
   globalSettings: string
@@ -49,7 +50,7 @@ interface AppStore {
   editorLetterSpacing: number
 
   // Story actions
-  resetWithProjectData: (nodes: Record<string, StoryNodeData>, rootNodeId: string | null, writingGuide?: string) => void
+  resetWithProjectData: (nodes: Record<string, StoryNodeData>, rootNodeId: string | null, writingGuide?: string, writingGuideChatHistory?: ChatMessage[]) => void
   initRootNode: () => void
   continueNode: (nodeId: string) => string
   branchNode: (nodeId: string) => string
@@ -71,6 +72,8 @@ interface AppStore {
   // Settings actions
   setGlobalSettings: (content: string) => void
   setProjectWritingGuide: (content: string) => void
+  addWritingGuideChatMessage: (msg: ChatMessage) => void
+  setWritingGuideChatHistory: (msgs: ChatMessage[]) => void
   setApiKey: (key: string) => void
   setApiUrl: (url: string) => void
   setApiFormat: (fmt: ApiFormat) => void
@@ -84,7 +87,7 @@ interface AppStore {
   // Helpers
   getAncestorChain: (nodeId: string) => StoryNodeData[]
   getChildren: (nodeId: string) => StoryNodeData[]
-  getProjectSnapshot: () => Pick<FullProjectData, 'nodes' | 'rootNodeId' | 'writingGuide'>
+  getProjectSnapshot: () => Pick<FullProjectData, 'nodes' | 'rootNodeId' | 'writingGuide' | 'writingGuideChatHistory'>
 }
 
 export const useStore = create<AppStore>()(
@@ -97,6 +100,7 @@ export const useStore = create<AppStore>()(
       editingNodeId: null,
       isGenerating: false,
       projectWritingGuide: '',
+      writingGuideChatHistory: [],
 
       // Settings defaults (persisted)
       globalSettings: '',
@@ -111,8 +115,8 @@ export const useStore = create<AppStore>()(
       editorLineHeight: 1.9,
       editorLetterSpacing: 0.01,
 
-      resetWithProjectData: (nodes, rootNodeId, writingGuide = '') =>
-        set({ nodes, rootNodeId, selectedNodeId: rootNodeId, editingNodeId: null, isGenerating: false, projectWritingGuide: writingGuide }),
+      resetWithProjectData: (nodes, rootNodeId, writingGuide = '', writingGuideChatHistory = []) =>
+        set({ nodes, rootNodeId, selectedNodeId: rootNodeId, editingNodeId: null, isGenerating: false, projectWritingGuide: writingGuide, writingGuideChatHistory }),
 
       initRootNode: () => {
         if (get().rootNodeId && get().nodes[get().rootNodeId!]) return
@@ -239,6 +243,9 @@ export const useStore = create<AppStore>()(
 
       setGlobalSettings: (content) => set({ globalSettings: content }),
       setProjectWritingGuide: (content) => set({ projectWritingGuide: content }),
+      addWritingGuideChatMessage: (msg) =>
+        set((s) => ({ writingGuideChatHistory: [...s.writingGuideChatHistory, msg] })),
+      setWritingGuideChatHistory: (msgs) => set({ writingGuideChatHistory: msgs }),
       setApiKey: (key) => set({ apiKey: key }),
       setApiUrl: (url) => set({ apiUrl: url }),
       setApiFormat: (fmt) => set({ apiFormat: fmt }),
@@ -268,6 +275,7 @@ export const useStore = create<AppStore>()(
         nodes: get().nodes,
         rootNodeId: get().rootNodeId,
         writingGuide: get().projectWritingGuide,
+        writingGuideChatHistory: get().writingGuideChatHistory,
       }),
     }),
     {

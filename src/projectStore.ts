@@ -7,7 +7,7 @@ import {
   importJsonFile, buildStoryChainText, initStorage,
 } from './storage'
 import {
-  FullProjectData, ProjectMeta, SingleBackupFile, MultiBackupFile, StoryNodeData,
+  ChatMessage, FullProjectData, ProjectMeta, SingleBackupFile, MultiBackupFile, StoryNodeData,
 } from './types'
 import { genId } from './api'
 
@@ -25,7 +25,7 @@ interface ProjectStore {
   closeProject: () => Promise<void>
   deleteProject: (id: string) => Promise<void>
   renameProject: (id: string, name: string) => Promise<void>
-  saveProjectData: (projectId: string, nodes: FullProjectData['nodes'], rootNodeId: string | null, writingGuide?: string) => Promise<void>
+  saveProjectData: (projectId: string, nodes: FullProjectData['nodes'], rootNodeId: string | null, writingGuide?: string, writingGuideChatHistory?: ChatMessage[]) => Promise<void>
 
   // Export
   exportProjectBackup: (projectId: string, currentNodes?: FullProjectData['nodes'], rootNodeId?: string | null) => Promise<void>
@@ -60,7 +60,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
     const passwordHash = password ? await hashPassword(password) : null
 
     const meta: ProjectMeta = { id, name, passwordHash, createdAt: now, updatedAt: now, nodeCount: 0 }
-    const data: FullProjectData = { id, name, passwordHash, nodes: {}, rootNodeId: null, writingGuide: '', createdAt: now, updatedAt: now }
+    const data: FullProjectData = { id, name, passwordHash, nodes: {}, rootNodeId: null, writingGuide: '', writingGuideChatHistory: [], createdAt: now, updatedAt: now }
 
     await writeProjectData(data)
 
@@ -107,7 +107,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
     if (data) await writeProjectData({ ...data, name })
   },
 
-  saveProjectData: async (projectId, nodes, rootNodeId, writingGuide = '') => {
+  saveProjectData: async (projectId, nodes, rootNodeId, writingGuide = '', writingGuideChatHistory = []) => {
     const meta = get().projects.find((p) => p.id === projectId)
     if (!meta) return
 
@@ -120,6 +120,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
       nodes,
       rootNodeId,
       writingGuide,
+      writingGuideChatHistory,
       createdAt: meta.createdAt,
       updatedAt: now,
     }
