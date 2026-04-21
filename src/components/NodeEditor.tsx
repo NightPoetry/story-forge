@@ -15,6 +15,7 @@ export default function NodeEditor({ nodeId, isDirty, onManualSave }: Props) {
   const node = nodes[nodeId]
   const [isStreaming, setIsStreaming] = useState(false)
   const [showGuide, setShowGuide] = useState(false)
+  const [showCreated, setShowCreated] = useState(() => !!node && Date.now() - node.createdAt < 2000)
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -143,6 +144,28 @@ export default function NodeEditor({ nodeId, isDirty, onManualSave }: Props) {
             </button>
           </div>
         </div>
+
+        {/* Created banner */}
+        {showCreated && (
+          <div
+            className="created-banner flex-shrink-0 flex items-center justify-center gap-2 py-1.5"
+            onAnimationEnd={() => setShowCreated(false)}
+            style={{
+              background: node.branchType === 'branch'
+                ? 'rgba(58,95,130,0.12)'
+                : 'rgba(201,169,110,0.1)',
+              borderBottom: `1px solid ${node.branchType === 'branch' ? 'rgba(58,95,130,0.25)' : 'var(--border-gold)'}`,
+            }}>
+            <span style={{
+              color: node.branchType === 'branch' ? '#5080a8' : 'var(--gold)',
+              fontSize: '11px',
+              fontWeight: 500,
+              letterSpacing: '0.03em',
+            }}>
+              {node.branchType === 'branch' ? '⎇ 分支已创建' : node.branchType === 'continue' ? '↓ 续篇已创建' : ''}
+            </span>
+          </div>
+        )}
 
         {/* Split panels */}
         <div className="flex-1 flex overflow-hidden" style={{ flexDirection: 'row' }}>

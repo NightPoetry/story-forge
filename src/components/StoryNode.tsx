@@ -44,9 +44,11 @@ function StoryNodeComponent({ data, selected }: NodeProps<StoryNodeFlowData>) {
     if (!isRoot) deleteNode(data.nodeId)
   }
 
+  const isFresh = Date.now() - node.createdAt < 3000
+
   return (
     <div
-      className="story-node-wrapper"
+      className={`story-node-wrapper${isFresh ? ' node-spawn' : ''}`}
       style={{ width: 220 }}
       onDoubleClick={handleEdit}>
       <Handle

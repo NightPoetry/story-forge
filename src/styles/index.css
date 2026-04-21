@@ -199,6 +199,42 @@ body {
   animation: gentlePulse 1.5s ease-in-out infinite;
 }
 
+/* Node spawn animation — scale in with gold glow */
+@keyframes nodeSpawn {
+  0% {
+    opacity: 0;
+    transform: scale(0.7);
+    filter: drop-shadow(0 0 0 transparent);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.04);
+    filter: drop-shadow(0 0 12px rgba(201,169,110,0.4));
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    filter: drop-shadow(0 0 0 transparent);
+  }
+}
+
+.node-spawn {
+  animation: nodeSpawn 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* Created banner — slide down, hold, slide up */
+@keyframes createdBanner {
+  0%   { opacity: 0; transform: translateY(-100%); }
+  12%  { opacity: 1; transform: translateY(0); }
+  80%  { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-100%); }
+}
+
+.created-banner {
+  animation: createdBanner 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  pointer-events: none;
+}
+
 /* Prevent text selection on node drag */
 .react-flow__node {
   user-select: none;
