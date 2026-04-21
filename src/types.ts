@@ -57,6 +57,7 @@ export interface FullProjectData {
   nodes: Record<string, StoryNodeData>
   rootNodeId: string | null
   writingGuide: string
+  writingGuideChatHistory?: ChatMessage[]
   // Legacy fields kept for reading old saves
   foreshadowings?: ForeshadowingItem[]
   foreshadowingCounter?: number

@@ -18,7 +18,7 @@ export default function App() {
     apiKey, apiUrl, apiFormat, apiModel,
     setApiKey, setApiUrl, setApiFormat, setApiModel,
     nodes, rootNodeId, editingNodeId,
-    projectWritingGuide,
+    projectWritingGuide, writingGuideChatHistory,
   } = useStore()
 
   const { init, view, currentProjectId, saveProjectData } = useProjectStore()
@@ -27,6 +27,7 @@ export default function App() {
   const [form, setForm] = useState({ key: '', url: '', model: '', format: 'anthropic' as ApiFormat })
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const guideSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const prevNodes = useRef(nodes)
 
   // Init project store on mount
@@ -35,16 +36,26 @@ export default function App() {
   // Show API key modal if not configured
   useEffect(() => { if (!apiKey) setModalOpen(true) }, [apiKey])
 
-  // Auto-save current project when story data changes (debounced 1.5s)
+  // Auto-save when story nodes change (debounced 1.5s)
   useEffect(() => {
     if (!currentProjectId || nodes === prevNodes.current) return
     prevNodes.current = nodes
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => {
-      saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide)
+      saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, writingGuideChatHistory)
     }, 1500)
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current) }
-  }, [nodes, currentProjectId, rootNodeId, projectWritingGuide])
+  }, [nodes, currentProjectId, rootNodeId, projectWritingGuide, writingGuideChatHistory])
+
+  // Auto-save when guide content or guide chat history changes (debounced 1.5s)
+  useEffect(() => {
+    if (!currentProjectId) return
+    if (guideSaveTimer.current) clearTimeout(guideSaveTimer.current)
+    guideSaveTimer.current = setTimeout(() => {
+      saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, writingGuideChatHistory)
+    }, 1500)
+    return () => { if (guideSaveTimer.current) clearTimeout(guideSaveTimer.current) }
+  }, [projectWritingGuide, writingGuideChatHistory])
 
   const openModal = () => {
     setForm({ key: apiKey, url: apiUrl, model: apiModel, format: apiFormat })

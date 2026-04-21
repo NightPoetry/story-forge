@@ -1,18 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from '../store'
 import StoryPanel from './StoryPanel'
 import ChatPanel from './ChatPanel'
+import WritingGuideModal from './WritingGuideModal'
 
 interface Props {
   nodeId: string
 }
 
 export default function NodeEditor({ nodeId }: Props) {
-  const { setEditingNode, nodes, continueNode, branchNode, projectWritingGuide, setProjectWritingGuide } = useStore()
+  const { setEditingNode, nodes, continueNode, branchNode, projectWritingGuide } = useStore()
   const node = nodes[nodeId]
   const [isStreaming, setIsStreaming] = useState(false)
   const [showGuide, setShowGuide] = useState(false)
-  const [guideDraft, setGuideDraft] = useState('')
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -34,15 +34,7 @@ export default function NodeEditor({ nodeId }: Props) {
     setEditingNode(newId)
   }
 
-  const openGuide = () => {
-    setGuideDraft(projectWritingGuide)
-    setShowGuide(true)
-  }
-
-  const saveGuide = () => {
-    setProjectWritingGuide(guideDraft)
-    setShowGuide(false)
-  }
+  const openGuide = () => setShowGuide(true)
 
   return (
     <div
@@ -147,89 +139,7 @@ export default function NodeEditor({ nodeId }: Props) {
       </div>
 
       {/* Writing Guide Modal */}
-      {showGuide && (
-        <div
-          className="absolute inset-0 z-30 flex items-center justify-center"
-          style={{ background: 'rgba(10,9,18,0.75)', backdropFilter: 'blur(4px)' }}
-          onClick={() => setShowGuide(false)}>
-          <div
-            className="w-full rounded flex flex-col"
-            style={{
-              maxWidth: 'min(540px, calc(100vw - 32px))',
-              background: 'var(--bg-card)',
-              border: '1px solid rgba(80,160,80,0.3)',
-              boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
-              maxHeight: 'min(70vh, calc(100vh - 96px))',
-            }}
-            onClick={(e) => e.stopPropagation()}>
-            {/* Modal header */}
-            <div className="flex items-start justify-between px-6 py-4 flex-shrink-0"
-              style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-              <div>
-                <h2 className="font-serif text-base font-medium" style={{ color: 'var(--text-primary)' }}>
-                  故事设定
-                </h2>
-                <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)', lineHeight: 1.6 }}>
-                  本项目的世界观、人物关系、背景设定。每次发送时注入上下文末尾，优先级高于写作规则，可被状态卡片覆盖。
-                </p>
-              </div>
-              <button onClick={() => setShowGuide(false)}
-                style={{ color: 'var(--text-muted)', fontSize: '16px', lineHeight: 1 }}
-                className="hover:opacity-70 mt-0.5">
-                ✕
-              </button>
-            </div>
-
-            {/* Textarea — flex-1 min-h-0 prevents overflow */}
-            <div className="flex-1 min-h-0 flex flex-col p-4">
-              <textarea
-                value={guideDraft}
-                onChange={(e) => setGuideDraft(e.target.value)}
-                placeholder="例如：&#10;- 文风：简洁克制，少用形容词&#10;- 主角性格：冷静内敛，行事果断&#10;- 世界观：近未来架空，科技高度发达但贫富分化严重&#10;- 叙事视角：第三人称有限视角"
-                className="flex-1 min-h-0 w-full resize-none outline-none text-sm"
-                autoFocus
-                style={{
-                  background: 'transparent',
-                  color: 'var(--text-primary)',
-                  fontFamily: '"DM Sans", sans-serif',
-                  lineHeight: '1.7',
-                  fontSize: '13px',
-                }}
-              />
-            </div>
-
-            {/* Footer */}
-            <div className="flex items-center justify-between px-6 py-3 flex-shrink-0"
-              style={{ borderTop: '1px solid var(--border-subtle)' }}>
-              <span style={{ color: 'var(--text-muted)', fontSize: '11px', opacity: 0.6 }}>
-                {guideDraft.trim().length > 0 ? `${guideDraft.trim().length} 字符` : '留空则不附加'}
-              </span>
-              <div className="flex gap-2">
-                {guideDraft.trim() && (
-                  <button
-                    onClick={() => setGuideDraft('')}
-                    className="px-3 py-1.5 rounded text-xs transition-all hover:opacity-70"
-                    style={{ color: 'rgba(200,80,80,0.7)', border: '1px solid rgba(200,80,80,0.2)', fontSize: '11px' }}>
-                    清空
-                  </button>
-                )}
-                <button
-                  onClick={() => setShowGuide(false)}
-                  className="px-3 py-1.5 rounded text-xs transition-all hover:opacity-70"
-                  style={{ color: 'var(--text-muted)', border: '1px solid var(--border-subtle)', fontSize: '11px' }}>
-                  取消
-                </button>
-                <button
-                  onClick={saveGuide}
-                  className="px-4 py-1.5 rounded text-xs font-medium transition-all hover:opacity-90"
-                  style={{ background: 'rgba(80,160,80,0.2)', color: 'rgba(120,200,120,0.9)', border: '1px solid rgba(80,160,80,0.3)', fontSize: '11px' }}>
-                  保存
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {showGuide && <WritingGuideModal onClose={() => setShowGuide(false)} />}
     </div>
   )
 }
