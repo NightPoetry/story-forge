@@ -56,6 +56,10 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     }
     addChatMessage(nodeId, userMsg)
 
+    // Snapshot state for rollback if generation fails
+    const prevStoryContent = node.storyContent
+    const prevStateCard = { ...node.stateCard }
+
     const controller = new AbortController()
     abortControllerRef.current = controller
 
@@ -107,6 +111,9 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
         onStreamingChange(false)
       },
       (err) => {
+        // Roll back any partial writes so content isn't left in a broken state
+        updateStoryContent(nodeId, prevStoryContent)
+        updateStateCard(nodeId, prevStateCard)
         addChatMessage(nodeId, {
           id: genId(), role: 'assistant', content: `生成失败：${err}`, timestamp: Date.now(),
         })
@@ -115,6 +122,15 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
         onStreamingChange(false)
       },
       controller.signal,
+      // Real-time streaming delta — updates content as it arrives
+      (toolName, text) => {
+        if (controller.signal.aborted) return
+        if (toolName === 'write_story') {
+          updateStoryContent(nodeId, text)
+        } else if (toolName === 'update_state_card') {
+          updateStateCard(nodeId, { content: text, lastUpdated: Date.now() })
+        }
+      },
     )
   }
 
