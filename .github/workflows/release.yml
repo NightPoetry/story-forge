@@ -73,7 +73,7 @@ jobs:
             | macOS (Apple Silicon + Intel) | `.dmg` |
             | Linux | `.AppImage` / `.deb` |
             | Windows | `.msi` / `.exe` |
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
           tauriScript: npx @tauri-apps/cli
