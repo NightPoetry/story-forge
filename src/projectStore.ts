@@ -254,6 +254,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
   },
 }))
 
-if (typeof window !== 'undefined') {
+// @ts-ignore — Vite injects import.meta.env at build time
+if (import.meta.env?.DEV && typeof window !== 'undefined') {
   (window as unknown as Record<string, unknown>).__PROJECT_STORE__ = useProjectStore
 }

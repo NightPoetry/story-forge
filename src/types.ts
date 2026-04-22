@@ -15,10 +15,28 @@ export interface StateCardData {
 
 // ── Foreshadowing ─────────────────────────────────────────────────────────
 
+// Forward foreshadowing: details from earlier text reused to support current plot
+export interface ForwardForeshadowingRecord {
+  detail: string       // The original detail from earlier text
+  source: string       // Where it appeared (which chapter/context)
+  usage: string        // How it was used in current chapter
+}
+
+export interface ForwardForeshadowingCandidate {
+  detail: string       // A detail from earlier text
+  source: string       // Where it appeared
+  potential: string    // How it could be used
+}
+
+export interface ForwardForeshadowingReport {
+  used: ForwardForeshadowingRecord[]
+  candidates: ForwardForeshadowingCandidate[]
+}
+
 export interface ForeshadowingItem {
   id: string            // Readable ID like "F1", "F2"
-  secret: string        // The actual truth / what will be revealed
-  plantNote: string     // Optional: how to hint at it subtly
+  secret: string        // The hidden truth (only the author knows)
+  plantNote: string     // How to hint while misleading
   status: 'planted' | 'collected'
   createdAt: number
   collectedAt?: number
@@ -46,6 +64,7 @@ export interface StoryNodeData {
   targetWordCount?: number
   foreshadowings: ForeshadowingItem[]
   foreshadowingCounter: number
+  forwardForeshadowing?: ForwardForeshadowingReport
 }
 
 // ── Project types ──────────────────────────────────────────────────────────

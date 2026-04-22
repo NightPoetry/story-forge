@@ -10,6 +10,19 @@ function isTauri() {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
+function isLocalUrl(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname
+    return hostname === 'localhost'
+      || hostname === '127.0.0.1'
+      || hostname === '0.0.0.0'
+      || hostname === '[::1]'
+      || hostname.startsWith('192.168.')
+      || hostname.startsWith('10.')
+      || /^172\.(1[6-9]|2\d|3[01])\./.test(hostname)
+  } catch { return false }
+}
+
 // Routes official Anthropic API through Vite proxy in browser to avoid CORS
 function resolveAnthropicBase(apiUrl: string): string {
   const base = apiUrl.replace(/\/$/, '')
@@ -56,16 +69,16 @@ export function buildDynamicContext(
   const planted = foreshadowings.filter((f) => f.status === 'planted')
   const collected = foreshadowings.filter((f) => f.status === 'collected')
   if (foreshadowings.length > 0) {
-    const lines: string[] = ['# 伏笔档案（作者机密——绝不直接透露给读者）']
+    const lines: string[] = ['# 逆伏笔档案（作者机密——绝不直接透露给读者）']
     if (planted.length > 0) {
-      lines.push('\n## 待回收伏笔（在故事中巧妙埋下暗示，同时以合理细节误导读者，不得直接揭示）')
+      lines.push('\n## 待回收（刻意隐藏的真相。写作时通过暗示和误导让读者与主角一同被欺骗——暗示要有，但必须用剧情歪曲其含义，让人完全往相反方向理解。绝不得直接揭示）')
       for (const f of planted) {
-        lines.push(`\n[${f.id}] 真相：${f.secret}`)
-        if (f.plantNote.trim()) lines.push(`暗示方式：${f.plantNote}`)
+        lines.push(`\n[${f.id}] 隐藏真相：${f.secret}`)
+        if (f.plantNote.trim()) lines.push(`暗示与误导方式：${f.plantNote}`)
       }
     }
     if (collected.length > 0) {
-      lines.push('\n## 已回收伏笔（已在故事中揭示，可以公开引用）')
+      lines.push('\n## 已回收（已在故事中揭示，可以公开引用）')
       for (const f of collected) {
         lines.push(`[${f.id}] ${f.secret}`)
         if (f.revealNote) lines.push(`  → 揭示：${f.revealNote}`)
@@ -98,17 +111,6 @@ export function buildDynamicContext(
   return parts.join('\n\n---\n\n')
 }
 
-export function buildStateCardPrompt(
-  storyContent: string,
-  contextContent: string,
-): string {
-  let p = `你是一个故事状态追踪系统。请基于以下故事内容，生成简洁的状态卡片（不超过200字）。\n\n`
-  p += `格式：\n人物：[姓名/状态]\n地点：[当前场景]\n时间：[时间节点]\n关键事件：[重要情节]\n\n`
-  if (contextContent.trim()) p += `上文摘要：\n${contextContent.trim()}\n\n`
-  p += `当前章节：\n${storyContent.trim()}\n\n直接输出状态卡片，不要有任何额外说明。`
-  return p
-}
-
 // ── Tool definitions ────────────────────────────────────────────────────────
 
 const STORY_TOOLS = [
@@ -130,13 +132,13 @@ const STORY_TOOLS = [
   {
     name: 'update_state_card',
     description:
-      '更新派生状态卡片，追踪人物状态、世界状态、关键情节。当：①故事出现重要变化（新人物/关键事件/场景切换）②用户要求建立世界观/人物设定/基础设定/初始状态时调用。设定类请求优先更新状态卡片，不必写故事正文。',
+      '更新派生状态卡片，追踪人物状态、世界状态、关键情节。当：①故事出现重要变化（新人物/关键事件/场景切换）②用户要求建立世界观/人物设定/基础设定/初始状态时调用。设定类请求优先更新状态卡片，不必写故事正文。必须在现有卡片基础上增量更新：保留所有仍然有效的信息，增补新变化，修正已过时的内容，绝不可丢弃未变化的信息。',
     input_schema: {
       type: 'object' as const,
       properties: {
         content: {
           type: 'string',
-          description: '状态卡片全文，简洁精炼，涵盖：人物/地点/时间/关键事件',
+          description: '更新后的完整状态卡片。在现有内容基础上增补和修正，保留所有仍有效的信息，涵盖：人物（身份/状态/关系）、地点、时间线、关键事件、世界观规则、伏笔状态',
         },
       },
       required: ['content'],
@@ -162,7 +164,7 @@ const STORY_TOOLS = [
 const COLLECT_FORESHADOWING_TOOL = {
   name: 'collect_foreshadowing',
   description:
-    '当故事情节自然发展到揭示某伏笔的时机，在故事中回收该伏笔（写出揭示场景），并记录揭示说明。只能使用伏笔档案中列出的ID。',
+    '当故事情节自然发展到揭示某逆伏笔的时机，揭开隐藏真相，让读者和主角同时恍然大悟。只能使用伏笔档案中列出的ID。',
   input_schema: {
     type: 'object' as const,
     properties: {
@@ -173,8 +175,49 @@ const COLLECT_FORESHADOWING_TOOL = {
   },
 } as const
 
+const REPORT_FORWARD_FORESHADOWING_TOOL = {
+  name: 'report_forward_foreshadowing',
+  description:
+    '每次调用 write_story 后必须调用此工具，报告正伏笔使用情况：哪些上文细节被编织进了当前剧情（used），以及哪些上文细节适合在后续发挥作用（candidates）。如果没有则传空数组。',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      used: {
+        type: 'array',
+        description: '本次写作中实际使用的上文细节',
+        items: {
+          type: 'object',
+          properties: {
+            detail: { type: 'string', description: '上文中的原始细节' },
+            source: { type: 'string', description: '出自哪个章节/段落' },
+            usage: { type: 'string', description: '在本次写作中如何发挥了作用' },
+          },
+          required: ['detail', 'source', 'usage'],
+        },
+      },
+      candidates: {
+        type: 'array',
+        description: '上文中值得在后续利用但本次未用的细节',
+        items: {
+          type: 'object',
+          properties: {
+            detail: { type: 'string', description: '上文中的细节' },
+            source: { type: 'string', description: '出自哪个章节/段落' },
+            potential: { type: 'string', description: '可以如何利用' },
+          },
+          required: ['detail', 'source', 'potential'],
+        },
+      },
+    },
+    required: ['used', 'candidates'],
+  },
+} as const
+
 const TOOL_GUIDANCE = `你是专业故事创作助手。根据用户指令，调用合适的工具：
-- 用户要写/续写/修改故事情节 → 调用 write_story（故事中应根据伏笔档案植入暗示和误导）
+- 用户要写/续写/修改故事情节 → 调用 write_story
+  - 【正伏笔·自动】写作时主动回溯上文已有的细节（人物动作、物品、场景描写、对话中不经意提到的信息等），将其自然地编织进当前剧情以增强合理性。例如：主角陷入困境时，用上文中某个不起眼的细节帮助脱困；新的剧情转折通过前文某句话获得了伏笔式的呼应。这种"其实前面早就写过"的惊喜感是正伏笔的核心。
+  - 【逆伏笔·设计】根据伏笔档案中的隐藏真相，在故事中植入暗示但必须用剧情歪曲其含义，让读者和主角一同被误导——暗示要有，但理解方向必须是错的。
+  - 调用 write_story 后**必须**调用 report_forward_foreshadowing，报告用了哪些上文细节、还有哪些可用的候选细节。
 - 用户要求建立设定、世界观、人物背景，或故事出现重要变化 → 调用 update_state_card
 - 故事情节自然发展到揭示某伏笔的合适时机 → 调用 collect_foreshadowing（仅当伏笔档案有待回收项时可用）
 - 可同时调用多个工具
@@ -227,6 +270,7 @@ export type AIAction =
   | { type: 'update_state_card'; content: string }
   | { type: 'chat_reply'; content: string }
   | { type: 'collect_foreshadowing'; id: string; revealNote: string }
+  | { type: 'report_forward_foreshadowing'; used: { detail: string; source: string; usage: string }[]; candidates: { detail: string; source: string; potential: string }[] }
 
 export type AIGuideAction =
   | { type: 'update_guide'; content: string }
@@ -272,7 +316,7 @@ async function doStreamFetch(
   body: string,
   signal?: AbortSignal,
 ): Promise<Response> {
-  if (isTauri()) {
+  if (isTauri() && !isLocalUrl(url)) {
     dlog.info('fetch', `using tauri-http for: ${url}`)
     try {
       const res = await tauriFetch(url, { method: 'POST', headers, signal, body })
@@ -375,9 +419,11 @@ export async function runIntelligentGeneration(
 ) {
   const fullSystem = systemPrompt
   type ToolDef = { name: string; description: string; input_schema: { type: 'object'; properties: Record<string, unknown>; required: string[] } }
-  const tools = (hasActiveForeshadowings
-    ? [...STORY_TOOLS, COLLECT_FORESHADOWING_TOOL]
-    : [...STORY_TOOLS]) as unknown as ToolDef[]
+  const tools = [
+    ...STORY_TOOLS,
+    REPORT_FORWARD_FORESHADOWING_TOOL,
+    ...(hasActiveForeshadowings ? [COLLECT_FORESHADOWING_TOOL] : []),
+  ] as unknown as ToolDef[]
 
   if (cfg.apiFormat === 'anthropic') {
     await runAnthropicStreamingToolUse(
@@ -457,11 +503,18 @@ async function runAnthropicStreamingToolUse(
           const block = blocks.get(evt.index as number)
           if (block) {
             try {
-              const input = JSON.parse(block.buf) as Record<string, string>
-              if (block.name === 'write_story') onAction({ type: 'write_story', content: input.content ?? '' })
-              else if (block.name === 'update_state_card') onAction({ type: 'update_state_card', content: input.content ?? '' })
-              else if (block.name === 'chat_reply') { onAction({ type: 'chat_reply', content: input.message ?? '' }); hasChatReply = true }
-              else if (block.name === 'collect_foreshadowing') onAction({ type: 'collect_foreshadowing', id: input.id ?? '', revealNote: input.reveal_note ?? '' })
+              const input = JSON.parse(block.buf) as Record<string, unknown>
+              if (block.name === 'write_story') onAction({ type: 'write_story', content: (input.content as string) ?? '' })
+              else if (block.name === 'update_state_card') onAction({ type: 'update_state_card', content: (input.content as string) ?? '' })
+              else if (block.name === 'chat_reply') { onAction({ type: 'chat_reply', content: (input.message as string) ?? '' }); hasChatReply = true }
+              else if (block.name === 'collect_foreshadowing') onAction({ type: 'collect_foreshadowing', id: (input.id as string) ?? '', revealNote: (input.reveal_note as string) ?? '' })
+              else if (block.name === 'report_forward_foreshadowing') {
+                onAction({
+                  type: 'report_forward_foreshadowing',
+                  used: (input.used as { detail: string; source: string; usage: string }[]) ?? [],
+                  candidates: (input.candidates as { detail: string; source: string; potential: string }[]) ?? [],
+                })
+              }
             } catch { /* ignore parse error */ }
           }
         }
@@ -580,11 +633,18 @@ async function runOpenAIToolUse(
   let hasChatReply = false
   for (const accum of toolAccums.values()) {
     try {
-      const args = JSON.parse(accum.argBuf) as Record<string, string>
-      if (accum.name === 'write_story') onAction({ type: 'write_story', content: args.content ?? '' })
-      else if (accum.name === 'update_state_card') onAction({ type: 'update_state_card', content: args.content ?? '' })
-      else if (accum.name === 'chat_reply') { onAction({ type: 'chat_reply', content: args.message ?? '' }); hasChatReply = true }
-      else if (accum.name === 'collect_foreshadowing') onAction({ type: 'collect_foreshadowing', id: args.id ?? '', revealNote: args.reveal_note ?? '' })
+      const args = JSON.parse(accum.argBuf) as Record<string, unknown>
+      if (accum.name === 'write_story') onAction({ type: 'write_story', content: (args.content as string) ?? '' })
+      else if (accum.name === 'update_state_card') onAction({ type: 'update_state_card', content: (args.content as string) ?? '' })
+      else if (accum.name === 'chat_reply') { onAction({ type: 'chat_reply', content: (args.message as string) ?? '' }); hasChatReply = true }
+      else if (accum.name === 'collect_foreshadowing') onAction({ type: 'collect_foreshadowing', id: (args.id as string) ?? '', revealNote: (args.reveal_note as string) ?? '' })
+      else if (accum.name === 'report_forward_foreshadowing') {
+        onAction({
+          type: 'report_forward_foreshadowing',
+          used: (args.used as { detail: string; source: string; usage: string }[]) ?? [],
+          candidates: (args.candidates as { detail: string; source: string; potential: string }[]) ?? [],
+        })
+      }
     } catch { /* ignore */ }
   }
 
@@ -613,6 +673,13 @@ const PLAIN_OUTPUT_INSTRUCTIONS = `
 
 回收伏笔时（仅当伏笔档案有待回收项）：
 <collect_foreshadowing id="F1" reveal_note="如何揭示的说明" />
+
+如果写了故事正文，必须报告正伏笔使用情况：
+<forward_foreshadowing>
+used: [{"detail":"上文细节","source":"出处","usage":"如何使用"}]
+candidates: [{"detail":"上文细节","source":"出处","potential":"可以如何利用"}]
+</forward_foreshadowing>
+如果没有则传空数组。
 
 最后必须附上简短说明：
 <chat_reply>
@@ -646,6 +713,18 @@ function parsePlainActions(text: string): AIAction[] {
   let fm
   while ((fm = fRe.exec(text)) !== null) {
     actions.push({ type: 'collect_foreshadowing', id: fm[1], revealNote: fm[2] })
+  }
+
+  // <forward_foreshadowing> block
+  const ffBlock = extractTag('forward_foreshadowing')
+  if (ffBlock) {
+    try {
+      const usedMatch = /used:\s*(\[[\s\S]*?\])/.exec(ffBlock)
+      const candMatch = /candidates:\s*(\[[\s\S]*?\])/.exec(ffBlock)
+      const used = usedMatch ? JSON.parse(usedMatch[1]) as { detail: string; source: string; usage: string }[] : []
+      const candidates = candMatch ? JSON.parse(candMatch[1]) as { detail: string; source: string; potential: string }[] : []
+      actions.push({ type: 'report_forward_foreshadowing', used, candidates })
+    } catch { /* ignore parse errors */ }
   }
 
   const chatReply = extractTag('chat_reply')
@@ -912,65 +991,6 @@ export async function runSettingsGuideChat(
     }
     if (!hasChatReply) onAction({ type: 'chat_reply', content: '已记录。' })
     onComplete()
-  }
-}
-
-// ── State card generation (legacy, used by StateCard.tsx auto-update) ─────
-
-export async function generateStateCard(
-  cfg: ApiConfig,
-  prompt: string,
-  onComplete: (text: string) => void,
-  onError: (err: string) => void,
-) {
-  try {
-    let res: Response
-    if (cfg.apiFormat === 'anthropic') {
-      const base = resolveAnthropicBase(cfg.apiUrl)
-      res = await fetch(`${base}/v1/messages`, {
-        method: 'POST',
-        headers: anthropicHeaders(cfg.apiKey),
-        body: JSON.stringify({
-          model: cfg.apiModel,
-          max_tokens: 512,
-          messages: [{ role: 'user', content: prompt }],
-        }),
-      })
-    } else {
-      const base = resolveOpenAIBase(cfg.apiUrl)
-      res = await fetch(`${base}/chat/completions`, {
-        method: 'POST',
-        headers: openaiHeaders(cfg.apiKey),
-        body: JSON.stringify({
-          model: cfg.apiModel,
-          messages: [{ role: 'user', content: prompt }],
-        }),
-      })
-    }
-
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}))
-      onError(
-        (errBody as { error?: { message?: string } }).error?.message ||
-          `HTTP ${res.status}`,
-      )
-      return
-    }
-
-    const data = await res.json()
-    let text = ''
-    if (cfg.apiFormat === 'anthropic') {
-      text =
-        (data as { content?: { type: string; text: string }[] }).content?.[0]
-          ?.text ?? ''
-    } else {
-      text =
-        (data as { choices?: { message: { content: string } }[] }).choices?.[0]
-          ?.message?.content ?? ''
-    }
-    onComplete(text)
-  } catch (e) {
-    onError(e instanceof Error ? e.message : 'Unknown error')
   }
 }
 
