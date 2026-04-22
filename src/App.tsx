@@ -12,7 +12,7 @@ import NodeTrashPanel from './components/NodeTrashPanel'
 
 const FORMAT_DEFAULTS: Record<ApiFormat, { url: string; model: string }> = {
   anthropic: { url: 'https://api.anthropic.com', model: 'claude-sonnet-4-6' },
-  openai:    { url: 'https://api.openai.com',    model: 'gpt-4o' },
+  openai:    { url: 'https://api.openai.com/v1',  model: 'gpt-4o' },
 }
 
 export default function App() {
@@ -243,6 +243,11 @@ export default function App() {
                     placeholder={FORMAT_DEFAULTS[form.format].url}
                     className="w-full px-3 py-2.5 rounded text-sm outline-none"
                     style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '12px' }} />
+                  {form.format === 'openai' && (
+                    <p className="text-xs mt-1.5" style={{ color: 'var(--text-muted)', fontSize: '11px', opacity: 0.7 }}>
+                      请填写到版本路径，如 <span style={{ fontFamily: 'monospace', color: 'var(--gold)', opacity: 1 }}>https://api.openai.com/v1</span>、<span style={{ fontFamily: 'monospace', color: 'var(--gold)', opacity: 1 }}>https://api.deepseek.com/v1</span>；部分服务可能使用 /v3 等其他版本
+                    </p>
+                  )}
                 </div>
 
                 {/* Key */}

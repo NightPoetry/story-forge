@@ -19,9 +19,9 @@ function resolveAnthropicBase(apiUrl: string): string {
   return base
 }
 
-// Normalize OpenAI-compatible base URL: strip trailing /v1, /v1/, etc.
+// Normalize OpenAI-compatible base URL: user supplies the versioned endpoint (e.g. /v1)
 function resolveOpenAIBase(apiUrl: string): string {
-  return apiUrl.replace(/\/$/, '').replace(/\/v1$/, '')
+  return apiUrl.replace(/\/+$/, '')
 }
 
 // ── Prompt builders ────────────────────────────────────────────────────────
@@ -462,7 +462,7 @@ async function runOpenAIToolUse(
   let result: SSEResult
   try {
     result = await postSSE(
-      `${base}/v1/chat/completions`,
+      `${base}/chat/completions`,
       openaiHeaders(cfg.apiKey),
       {
         model: cfg.apiModel, stream: true,
@@ -618,7 +618,7 @@ async function runOpenAIPlainFallback(
   let result: SSEResult
   try {
     result = await postSSE(
-      `${base}/v1/chat/completions`,
+      `${base}/chat/completions`,
       openaiHeaders(cfg.apiKey),
       {
         model: cfg.apiModel, stream: true,
@@ -811,7 +811,7 @@ export async function runSettingsGuideChat(
     let result: SSEResult
     try {
       result = await postSSE(
-        `${base}/v1/chat/completions`,
+        `${base}/chat/completions`,
         openaiHeaders(cfg.apiKey),
         { model: cfg.apiModel, stream: true, messages: [{ role: 'system', content: systemPrompt }, ...messages], tools: openAITools, tool_choice: 'auto' },
         (raw) => {
@@ -882,7 +882,7 @@ export async function generateStateCard(
       })
     } else {
       const base = resolveOpenAIBase(cfg.apiUrl)
-      res = await fetch(`${base}/v1/chat/completions`, {
+      res = await fetch(`${base}/chat/completions`, {
         method: 'POST',
         headers: openaiHeaders(cfg.apiKey),
         body: JSON.stringify({
@@ -982,7 +982,7 @@ export async function streamGeneration(
     const base = cfg.apiUrl.replace(/\/$/, '')
     let res: Response
     try {
-      res = await fetch(`${base}/v1/chat/completions`, {
+      res = await fetch(`${base}/chat/completions`, {
         method: 'POST',
         headers: openaiHeaders(cfg.apiKey),
         body: JSON.stringify({
@@ -1119,7 +1119,7 @@ export async function checkApiConfig(cfg: ApiConfig): Promise<ApiCheckResult> {
     // 1. Connectivity — basic chat
     let res: Response
     try {
-      res = await fetch(`${base}/v1/chat/completions`, {
+      res = await fetch(`${base}/chat/completions`, {
         method: 'POST',
         headers: openaiHeaders(cfg.apiKey),
         body: JSON.stringify({ model: cfg.apiModel, max_tokens: 32, messages: [{ role: 'system', content: 'reply OK' }, ...testMsg] }),
@@ -1143,7 +1143,7 @@ export async function checkApiConfig(cfg: ApiConfig): Promise<ApiCheckResult> {
 
     // 2. Tool use
     try {
-      const toolRes = await fetch(`${base}/v1/chat/completions`, {
+      const toolRes = await fetch(`${base}/chat/completions`, {
         method: 'POST',
         headers: openaiHeaders(cfg.apiKey),
         body: JSON.stringify({
@@ -1171,7 +1171,7 @@ export async function checkApiConfig(cfg: ApiConfig): Promise<ApiCheckResult> {
 
     // 3. Streaming
     try {
-      const streamRes = await fetch(`${base}/v1/chat/completions`, {
+      const streamRes = await fetch(`${base}/chat/completions`, {
         method: 'POST',
         headers: openaiHeaders(cfg.apiKey),
         body: JSON.stringify({ model: cfg.apiModel, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'say hi' }] }),
