@@ -1,5 +1,5 @@
-// Debug logging system — buffered in-memory, exposed via window.__DEBUG_API__
-// In dev mode, logs are also pushed to the Vite debug WebSocket at ws://localhost:1420/__debug_ws
+// Debug logging system — only active in dev mode.
+// In production, all functions are no-ops with zero overhead.
 
 type LogLevel = 'info' | 'warn' | 'error' | 'stream'
 interface LogEntry {
@@ -9,6 +9,9 @@ interface LogEntry {
   msg: string
   data?: unknown
 }
+
+// @ts-ignore — Vite injects import.meta.env at build time
+const IS_DEV: boolean = import.meta.env?.DEV ?? false
 
 const MAX_ENTRIES = 2000
 const buffer: LogEntry[] = []
@@ -44,8 +47,7 @@ function connectWS() {
   } catch { /* ignore in non-dev */ }
 }
 
-// @ts-ignore — Vite injects import.meta.env at build time
-if (import.meta.env?.DEV) connectWS()
+if (IS_DEV) connectWS()
 
 function push(level: LogLevel, tag: string, msg: string, data?: unknown) {
   const entry: LogEntry = { ts: Date.now(), level, tag, msg, data }
@@ -56,16 +58,26 @@ function push(level: LogLevel, tag: string, msg: string, data?: unknown) {
   }
 }
 
-export const dlog = {
-  info: (tag: string, msg: string, data?: unknown) => push('info', tag, msg, data),
-  warn: (tag: string, msg: string, data?: unknown) => push('warn', tag, msg, data),
-  error: (tag: string, msg: string, data?: unknown) => push('error', tag, msg, data),
-  stream: (tag: string, msg: string, data?: unknown) => push('stream', tag, msg, data),
-  getBuffer: () => buffer,
-  clear: () => { buffer.length = 0 },
-}
+const noop = () => {}
 
-// Expose globally for debug API access
-if (typeof window !== 'undefined') {
+export const dlog = IS_DEV
+  ? {
+      info: (tag: string, msg: string, data?: unknown) => push('info', tag, msg, data),
+      warn: (tag: string, msg: string, data?: unknown) => push('warn', tag, msg, data),
+      error: (tag: string, msg: string, data?: unknown) => push('error', tag, msg, data),
+      stream: (tag: string, msg: string, data?: unknown) => push('stream', tag, msg, data),
+      getBuffer: () => buffer,
+      clear: () => { buffer.length = 0 },
+    }
+  : {
+      info: noop as (tag: string, msg: string, data?: unknown) => void,
+      warn: noop as (tag: string, msg: string, data?: unknown) => void,
+      error: noop as (tag: string, msg: string, data?: unknown) => void,
+      stream: noop as (tag: string, msg: string, data?: unknown) => void,
+      getBuffer: () => [] as LogEntry[],
+      clear: noop,
+    }
+
+if (IS_DEV && typeof window !== 'undefined') {
   (window as unknown as Record<string, unknown>).__DEBUG_LOG__ = dlog
 }

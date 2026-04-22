@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { ApiFormat, BranchType, ChatMessage, ForeshadowingItem, FullProjectData, StateCardData, StoryNodeData, ToolStreamMode, TrashedNodeGroup } from './types'
+import { ApiFormat, BranchType, ChatMessage, ForeshadowingItem, ForwardForeshadowingReport, FullProjectData, StateCardData, StoryNodeData, ToolStreamMode, TrashedNodeGroup } from './types'
 import { genId } from './api'
 
 function makeNode(
@@ -78,6 +78,9 @@ interface AppStore {
   updateForeshadowing: (nodeId: string, id: string, data: Partial<ForeshadowingItem>) => void
   collectForeshadowing: (nodeId: string, id: string, revealNote: string) => void
   removeForeshadowing: (nodeId: string, id: string) => void
+
+  // Forward foreshadowing
+  updateForwardForeshadowing: (nodeId: string, report: ForwardForeshadowingReport) => void
 
   // Settings actions
   setGlobalSettings: (content: string) => void
@@ -287,6 +290,14 @@ export const useStore = create<AppStore>()(
           },
         })),
 
+      updateForwardForeshadowing: (nodeId, report) =>
+        set((s) => ({
+          nodes: {
+            ...s.nodes,
+            [nodeId]: { ...s.nodes[nodeId], forwardForeshadowing: report },
+          },
+        })),
+
       setGlobalSettings: (content) => set({ globalSettings: content }),
       setProjectWritingGuide: (content) => set({ projectWritingGuide: content }),
       addWritingGuideChatMessage: (msg) =>
@@ -408,6 +419,7 @@ export const useStore = create<AppStore>()(
   ),
 )
 
-if (typeof window !== 'undefined') {
+// @ts-ignore — Vite injects import.meta.env at build time
+if (import.meta.env?.DEV && typeof window !== 'undefined') {
   (window as unknown as Record<string, unknown>).__STORE__ = useStore
 }

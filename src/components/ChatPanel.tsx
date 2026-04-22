@@ -28,6 +28,7 @@ const TOOL_LABELS: Record<string, string> = {
   update_state_card: '正在更新状态卡片…',
   chat_reply: '正在生成回复…',
   collect_foreshadowing: '正在回收伏笔…',
+  report_forward_foreshadowing: '分析正伏笔…',
 }
 
 function playDoneSound() {
@@ -56,6 +57,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     isGenerating, setIsGenerating,
     collectForeshadowing, pushUndoSnapshot,
     soundEnabled, setSoundEnabled,
+    updateForwardForeshadowing,
   } = useStore()
 
   const node = nodes[nodeId]
@@ -135,6 +137,8 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
           })
         } else if (action.type === 'collect_foreshadowing') {
           collectForeshadowing(nodeId, action.id, action.revealNote)
+        } else if (action.type === 'report_forward_foreshadowing') {
+          updateForwardForeshadowing(nodeId, { used: action.used, candidates: action.candidates })
         }
       },
       (toolName) => {
@@ -182,7 +186,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
             if (typewriterRef.current) clearTimeout(typewriterRef.current.timer)
             const tw = { full: text, pos: prevLen, timer: 0 as unknown as ReturnType<typeof setTimeout> }
             typewriterRef.current = tw
-            const CHARS_PER_TICK = 3
+            const CHARS_PER_TICK = newChars > 1000 ? Math.max(3, Math.ceil(newChars / 300)) : 3
             const TICK_MS = 16
             const tick = () => {
               if (controller.signal.aborted) { typewriterRef.current = null; return }

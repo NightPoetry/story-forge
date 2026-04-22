@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useStore } from '../store'
-import { ForeshadowingItem } from '../types'
+import { ForeshadowingItem, ForwardForeshadowingReport } from '../types'
 
 interface Props {
   nodeId: string
@@ -35,7 +35,7 @@ export default function ForeshadowingPanel({ nodeId }: Props) {
         <div className="flex items-center gap-2">
           <span className="text-xs font-medium"
             style={{ color: '#b8916a', letterSpacing: '0.06em', textTransform: 'uppercase', fontSize: '10px' }}>
-            伏笔列表
+            伏笔设计
           </span>
           {planted.length > 0 && (
             <span className="px-1.5 py-0.5 rounded-full"
@@ -58,6 +58,16 @@ export default function ForeshadowingPanel({ nodeId }: Props) {
         </button>
       </div>
 
+      {/* Forward foreshadowing chronicle */}
+      <ForwardForeshadowingSection report={node.forwardForeshadowing} />
+
+      {/* Divider between forward and reverse sections */}
+      <div className="flex items-center gap-2 pt-1">
+        <div style={{ height: '1px', flex: 1, background: 'rgba(180,140,90,0.15)' }} />
+        <span style={{ color: 'var(--text-muted)', fontSize: '9px', opacity: 0.5, whiteSpace: 'nowrap' }}>逆伏笔设计</span>
+        <div style={{ height: '1px', flex: 1, background: 'rgba(180,140,90,0.15)' }} />
+      </div>
+
       {/* Add form */}
       {adding && (
         <div className="p-2 rounded space-y-1.5"
@@ -65,7 +75,7 @@ export default function ForeshadowingPanel({ nodeId }: Props) {
           <textarea
             value={newSecret}
             onChange={(e) => setNewSecret(e.target.value)}
-            placeholder="伏笔真相（只有作者知道）…"
+            placeholder="隐藏真相（只有作者知道的秘密）…"
             rows={2}
             autoFocus
             className="w-full text-xs resize-none outline-none"
@@ -74,7 +84,7 @@ export default function ForeshadowingPanel({ nodeId }: Props) {
           <textarea
             value={newPlantNote}
             onChange={(e) => setNewPlantNote(e.target.value)}
-            placeholder="暗示方式（可选）：通过哪些细节暗示、如何误导…"
+            placeholder="暗示与误导（可选）：如何暗示真相但让读者往相反方向理解…"
             rows={2}
             className="w-full text-xs resize-none outline-none"
             style={{ background: 'transparent', color: 'var(--text-muted)', fontFamily: '"DM Sans", sans-serif', lineHeight: 1.6, fontSize: '11px' }}
@@ -98,7 +108,7 @@ export default function ForeshadowingPanel({ nodeId }: Props) {
       {foreshadowings.length === 0 && !adding && (
         <p className="text-center py-4 text-xs"
           style={{ color: 'var(--text-muted)', opacity: 0.6, fontSize: '11px', fontStyle: 'italic' }}>
-          暂无伏笔 — 点击「+ 添加」开始布局
+          暂无伏笔 — 点击「+ 添加」设计隐藏真相
         </p>
       )}
 
@@ -208,7 +218,7 @@ function ForeshadowingCard({
               <textarea
                 defaultValue={item.plantNote}
                 onBlur={(e) => onUpdate(item.id, { plantNote: e.target.value })}
-                placeholder="暗示方式…"
+                placeholder="暗示与误导方式…"
                 rows={2}
                 className="w-full text-xs resize-none outline-none"
                 style={{ background: 'rgba(180,140,90,0.05)', border: '1px solid rgba(180,140,90,0.1)', borderRadius: '3px', padding: '4px 6px', color: 'var(--text-muted)', fontFamily: '"DM Sans", sans-serif', fontSize: '11px', lineHeight: 1.6 }}
@@ -229,7 +239,7 @@ function ForeshadowingCard({
                 <div className="mt-1.5 space-y-1">
                   {item.plantNote && (
                     <p className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '10px', lineHeight: 1.5 }}>
-                      <span style={{ color: '#b8916a', opacity: 0.7 }}>暗示方式：</span>{item.plantNote}
+                      <span style={{ color: '#b8916a', opacity: 0.7 }}>暗示与误导：</span>{item.plantNote}
                     </p>
                   )}
                   {isCollected && item.revealNote && (
@@ -260,6 +270,84 @@ function ForeshadowingCard({
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Forward foreshadowing chronicle ──────────────────────────────────────────
+
+function ForwardForeshadowingSection({ report }: { report?: ForwardForeshadowingReport }) {
+  const [showCandidates, setShowCandidates] = useState(false)
+  const hasUsed = report && report.used.length > 0
+  const hasCandidates = report && report.candidates.length > 0
+
+  return (
+    <div className="space-y-1.5">
+      <span className="text-xs font-medium"
+        style={{ color: '#6aa0c8', letterSpacing: '0.06em', textTransform: 'uppercase', fontSize: '10px' }}>
+        正伏笔小传
+      </span>
+
+      {/* Used forward foreshadowings */}
+      {hasUsed ? (
+        <div className="space-y-1">
+          {report.used.map((item, i) => (
+            <div key={i} className="rounded px-2.5 py-2"
+              style={{ background: 'rgba(100,160,200,0.06)', border: '1px solid rgba(100,160,200,0.15)' }}>
+              <p className="text-xs" style={{ color: 'var(--text-primary)', fontSize: '11px', lineHeight: 1.6 }}>
+                {item.detail}
+              </p>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-muted)', fontSize: '10px', lineHeight: 1.5 }}>
+                <span style={{ color: '#6aa0c8', opacity: 0.7 }}>出处：</span>{item.source}
+              </p>
+              <p className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '10px', lineHeight: 1.5 }}>
+                <span style={{ color: '#6aa0c8', opacity: 0.7 }}>作用：</span>{item.usage}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '10px', opacity: 0.5, fontStyle: 'italic' }}>
+          无 — AI 写作时会自动从上文中寻找可用细节
+        </p>
+      )}
+
+      {/* Candidate forward foreshadowings */}
+      {hasCandidates && (
+        <div>
+          <button
+            onClick={() => setShowCandidates((v) => !v)}
+            className="flex items-center gap-1.5 text-xs transition-all hover:opacity-80"
+            style={{ color: '#6aa0c8', fontSize: '10px', opacity: 0.8 }}>
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="none"
+              style={{ transform: showCandidates ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>
+              <path d="M2 1l4 3-4 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+            </svg>
+            待选素材 ({report!.candidates.length})
+          </button>
+          {showCandidates && (
+            <div className="space-y-1 mt-1">
+              {report!.candidates.map((item, i) => (
+                <div key={i} className="rounded px-2.5 py-2"
+                  style={{ background: 'rgba(100,160,200,0.03)', border: '1px dashed rgba(100,160,200,0.15)' }}>
+                  <p className="text-xs" style={{ color: 'var(--text-primary)', fontSize: '11px', lineHeight: 1.6, opacity: 0.8 }}>
+                    {item.detail}
+                  </p>
+                  <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)', fontSize: '10px', lineHeight: 1.5 }}>
+                    <span style={{ color: '#6aa0c8', opacity: 0.5 }}>出处：</span>{item.source}
+                  </p>
+                  <p className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '10px', lineHeight: 1.5 }}>
+                    <span style={{ color: '#6aa0c8', opacity: 0.5 }}>可用于：</span>{item.potential}
+                  </p>
+                </div>
+              ))}
+              <p className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '9px', opacity: 0.5 }}>
+                在对话中提及这些细节，AI 会将其编入剧情
+              </p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
