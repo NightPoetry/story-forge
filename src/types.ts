@@ -76,6 +76,16 @@ export interface FullProjectData {
   updatedAt: number
 }
 
+// ── API Check ─────────────────────────────────────────────────────────────
+
+export interface ApiCheckResult {
+  ok: boolean
+  connectivity: { ok: boolean; message: string }
+  chat: { ok: boolean; message: string }
+  toolUse: { ok: boolean; message: string }
+  streaming: { ok: boolean; message: string }
+}
+
 export interface SingleBackupFile {
   type: 'narrative-forge-project'
   version: 1

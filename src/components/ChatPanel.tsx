@@ -19,6 +19,24 @@ const TOOL_LABELS: Record<string, string> = {
   collect_foreshadowing: '正在回收伏笔…',
 }
 
+function playDoneSound() {
+  try {
+    const ctx = new AudioContext()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(880, ctx.currentTime)
+    osc.frequency.setValueAtTime(1174.66, ctx.currentTime + 0.1)
+    gain.gain.setValueAtTime(0.15, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35)
+    osc.start(ctx.currentTime)
+    osc.stop(ctx.currentTime + 0.35)
+    setTimeout(() => ctx.close(), 500)
+  } catch { /* audio not available */ }
+}
+
 export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
   const {
     nodes, addChatMessage, updateStoryContent, updateStateCard,
@@ -26,6 +44,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     apiKey, apiUrl, apiFormat, apiModel,
     isGenerating, setIsGenerating,
     collectForeshadowing, pushUndoSnapshot,
+    soundEnabled, setSoundEnabled,
   } = useStore()
 
   const node = nodes[nodeId]
@@ -34,6 +53,8 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>('chat')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const streamRafRef = useRef<number>(0)
+  const pendingStreamRef = useRef<{ story?: string; stateCard?: string }>({})
   const cfg = { apiKey, apiUrl, apiFormat, apiModel }
 
   useEffect(() => {
@@ -107,12 +128,19 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
         if (!controller.signal.aborted) setStage(TOOL_LABELS[toolName] ?? '处理中…')
       },
       () => {
+        flushPendingStream()
+        if (soundEnabled) playDoneSound()
         setStage(null)
         setIsGenerating(false)
         onStreamingChange(false)
       },
       (err) => {
-        // Roll back any partial writes so content isn't left in a broken state
+        // Cancel any pending stream updates before rolling back
+        if (streamRafRef.current) {
+          cancelAnimationFrame(streamRafRef.current)
+          streamRafRef.current = 0
+        }
+        pendingStreamRef.current = {}
         updateStoryContent(nodeId, prevStoryContent)
         updateStateCard(nodeId, prevStateCard)
         addChatMessage(nodeId, {
@@ -123,13 +151,34 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
         onStreamingChange(false)
       },
       controller.signal,
-      // Real-time streaming delta — updates content as it arrives
+      // Real-time streaming: direct DOM write for instant feedback + throttled store update
       (toolName, text) => {
         if (controller.signal.aborted) return
         if (toolName === 'write_story') {
-          updateStoryContent(nodeId, text)
+          pendingStreamRef.current.story = text
+          // Direct DOM update bypasses React for immediate visual feedback
+          const el = document.getElementById('story-textarea') as HTMLTextAreaElement | null
+          if (el) {
+            el.value = text
+            el.style.height = 'auto'
+            el.style.height = `${el.scrollHeight}px`
+          }
         } else if (toolName === 'update_state_card') {
-          updateStateCard(nodeId, { content: text, lastUpdated: Date.now() })
+          pendingStreamRef.current.stateCard = text
+        }
+        if (!streamRafRef.current) {
+          streamRafRef.current = requestAnimationFrame(() => {
+            streamRafRef.current = 0
+            const pending = pendingStreamRef.current
+            if (pending.story !== undefined) {
+              updateStoryContent(nodeId, pending.story)
+              pending.story = undefined
+            }
+            if (pending.stateCard !== undefined) {
+              updateStateCard(nodeId, { content: pending.stateCard, lastUpdated: Date.now() })
+              pending.stateCard = undefined
+            }
+          })
         }
       },
     )
@@ -142,8 +191,25 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     }
   }
 
+  const flushPendingStream = () => {
+    if (streamRafRef.current) {
+      cancelAnimationFrame(streamRafRef.current)
+      streamRafRef.current = 0
+    }
+    const pending = pendingStreamRef.current
+    if (pending.story !== undefined) {
+      updateStoryContent(nodeId, pending.story)
+      pending.story = undefined
+    }
+    if (pending.stateCard !== undefined) {
+      updateStateCard(nodeId, { content: pending.stateCard, lastUpdated: Date.now() })
+      pending.stateCard = undefined
+    }
+  }
+
   const handleAbort = () => {
     abortControllerRef.current?.abort()
+    flushPendingStream()
     setStage(null)
     setIsGenerating(false)
     onStreamingChange(false)
@@ -192,13 +258,34 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
             )}
           </button>
         </div>
-        {isGenerating && (
-          <button onClick={handleAbort}
-            className="flex-shrink-0 text-xs px-2 py-1 rounded mb-1 ml-2"
-            style={{ color: '#e06060', border: '1px solid rgba(200,80,80,0.3)', fontSize: '10px' }}>
-            停止
+        <div className="flex items-center gap-1.5 flex-shrink-0 ml-2 mb-1">
+          {isGenerating && (
+            <button onClick={handleAbort}
+              className="text-xs px-2 py-1 rounded"
+              style={{ color: '#e06060', border: '1px solid rgba(200,80,80,0.3)', fontSize: '10px' }}>
+              停止
+            </button>
+          )}
+          <button
+            onClick={() => setSoundEnabled(!soundEnabled)}
+            title={soundEnabled ? '完成提示音：开' : '完成提示音：关'}
+            className="flex items-center justify-center w-6 h-6 rounded transition-all hover:opacity-80"
+            style={{ color: soundEnabled ? 'var(--gold)' : 'var(--text-muted)', opacity: soundEnabled ? 1 : 0.4 }}>
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+              {soundEnabled ? (
+                <path d="M8 1.5L4 5.5H1v5h3l4 4V1.5zM11.5 4.5a4.5 4.5 0 010 7M13.5 2.5a8 8 0 010 11"
+                  stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+              ) : (
+                <>
+                  <path d="M8 1.5L4 5.5H1v5h3l4 4V1.5z"
+                    stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M12 5.5l4 5M16 5.5l-4 5"
+                    stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                </>
+              )}
+            </svg>
           </button>
-        )}
+        </div>
       </div>
 
       {/* Tab content */}
