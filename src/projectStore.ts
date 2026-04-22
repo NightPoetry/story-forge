@@ -253,3 +253,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
     return { count, errors }
   },
 }))
+
+if (typeof window !== 'undefined') {
+  (window as unknown as Record<string, unknown>).__PROJECT_STORE__ = useProjectStore
+}

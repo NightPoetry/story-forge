@@ -18,7 +18,7 @@ const FORMAT_DEFAULTS: Record<ApiFormat, { url: string; model: string }> = {
 export default function App() {
   const {
     apiKey, apiUrl, apiFormat, apiModel,
-    setApiKey, setApiUrl, setApiFormat, setApiModel,
+    setApiKey, setApiUrl, setApiFormat, setApiModel, setToolStreamMode,
     nodes, rootNodeId, editingNodeId,
     projectWritingGuide, writingGuideChatHistory,
     trashedNodes, autoSave, undo, redo,
@@ -114,6 +114,7 @@ export default function App() {
         apiModel: cfg.model.trim() || FORMAT_DEFAULTS[cfg.format].model,
       })
       setCheckResult(r)
+      if (r.toolStreamMode) setToolStreamMode(r.toolStreamMode)
     } catch {
       setCheckResult({ ok: false, connectivity: { ok: false, message: '检测异常' }, chat: { ok: false, message: '未检测' }, toolUse: { ok: false, message: '未检测' }, streaming: { ok: false, message: '未检测' } })
     }
@@ -308,6 +309,29 @@ export default function App() {
                       )}
                     </>
                   )}
+                </div>
+              )}
+
+              {/* Tool stream mode toggle */}
+              {form.format === 'openai' && checkResult?.connectivity?.ok && (
+                <div className="px-6 py-3 flex items-center justify-between" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                  <div>
+                    <div className="text-xs" style={{ color: 'var(--text-primary)', fontSize: '11px' }}>Function Call 模式</div>
+                    <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
+                      {useStore.getState().toolStreamMode === 'streaming'
+                        ? '使用工具调用（参数增量流式）'
+                        : '使用纯文本流式（推荐，逐字显示）'}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setToolStreamMode(useStore.getState().toolStreamMode === 'streaming' ? 'complete' : 'streaming')}
+                    className="relative w-9 h-5 rounded-full transition-colors"
+                    style={{ background: useStore.getState().toolStreamMode === 'streaming' ? 'var(--gold)' : 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
+                    <span className="absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full transition-transform" style={{
+                      background: 'var(--text-primary)',
+                      transform: useStore.getState().toolStreamMode === 'streaming' ? 'translateX(16px)' : 'translateX(0)',
+                    }} />
+                  </button>
                 </div>
               )}
             </div>

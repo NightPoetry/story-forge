@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { ApiFormat, BranchType, ChatMessage, ForeshadowingItem, FullProjectData, StateCardData, StoryNodeData, TrashedNodeGroup } from './types'
+import { ApiFormat, BranchType, ChatMessage, ForeshadowingItem, FullProjectData, StateCardData, StoryNodeData, ToolStreamMode, TrashedNodeGroup } from './types'
 import { genId } from './api'
 
 function makeNode(
@@ -57,6 +57,7 @@ interface AppStore {
   editorLineHeight: number
   editorLetterSpacing: number
   soundEnabled: boolean
+  toolStreamMode: ToolStreamMode
 
   // Story actions
   resetWithProjectData: (nodes: Record<string, StoryNodeData>, rootNodeId: string | null, writingGuide?: string, writingGuideChatHistory?: ChatMessage[], trashedNodes?: TrashedNodeGroup[]) => void
@@ -99,6 +100,7 @@ interface AppStore {
   setEditorLineHeight: (v: number) => void
   setEditorLetterSpacing: (v: number) => void
   setSoundEnabled: (v: boolean) => void
+  setToolStreamMode: (v: ToolStreamMode) => void
 
   // Helpers
   getAncestorChain: (nodeId: string) => StoryNodeData[]
@@ -135,6 +137,7 @@ export const useStore = create<AppStore>()(
       editorLineHeight: 1.9,
       editorLetterSpacing: 0.01,
       soundEnabled: true,
+      toolStreamMode: 'streaming' as ToolStreamMode,
 
       resetWithProjectData: (nodes, rootNodeId, writingGuide = '', writingGuideChatHistory = [], trashedNodes = []) =>
         set({ nodes, rootNodeId, selectedNodeId: rootNodeId, editingNodeId: null, isGenerating: false, projectWritingGuide: writingGuide, writingGuideChatHistory, trashedNodes, undoStack: [], redoStack: [] }),
@@ -360,6 +363,7 @@ export const useStore = create<AppStore>()(
       setEditorLineHeight: (v) => set({ editorLineHeight: v }),
       setEditorLetterSpacing: (v) => set({ editorLetterSpacing: v }),
       setSoundEnabled: (v) => set({ soundEnabled: v }),
+      setToolStreamMode: (v) => set({ toolStreamMode: v }),
 
       getAncestorChain: (nodeId) => {
         const nodes = get().nodes
@@ -398,7 +402,12 @@ export const useStore = create<AppStore>()(
         editorLetterSpacing: s.editorLetterSpacing,
         autoSave: s.autoSave,
         soundEnabled: s.soundEnabled,
+        toolStreamMode: s.toolStreamMode,
       }),
     },
   ),
 )
+
+if (typeof window !== 'undefined') {
+  (window as unknown as Record<string, unknown>).__STORE__ = useStore
+}

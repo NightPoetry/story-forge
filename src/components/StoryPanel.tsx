@@ -43,15 +43,29 @@ export default function StoryPanel({ nodeId, isStreaming }: Props) {
   const typographyRef = useRef<HTMLDivElement>(null)
   const rafRef = useRef<number>(0)
 
+  // Sync textarea height with content — preserve scroll position
   useEffect(() => {
     const el = textareaRef.current
     if (!el) return
     cancelAnimationFrame(rafRef.current)
     rafRef.current = requestAnimationFrame(() => {
+      const scroller = el.parentElement
+      const scrollTop = scroller?.scrollTop ?? 0
       el.style.height = 'auto'
       el.style.height = `${el.scrollHeight}px`
+      if (scroller) scroller.scrollTop = scrollTop
     })
   }, [node?.storyContent])
+
+  // When streaming ends, sync the DOM textarea value with the store
+  const prevStreamingRef = useRef(false)
+  useEffect(() => {
+    if (prevStreamingRef.current && !isStreaming) {
+      const el = textareaRef.current
+      if (el && node) el.value = node.storyContent
+    }
+    prevStreamingRef.current = !!isStreaming
+  }, [isStreaming, node?.storyContent])
 
   useEffect(() => {
     if (!showTypography) return
@@ -128,11 +142,12 @@ export default function StoryPanel({ nodeId, isStreaming }: Props) {
         <textarea
           id="story-textarea"
           ref={textareaRef}
-          value={node.storyContent}
+          {...(isStreaming ? {} : { value: node.storyContent })}
           onChange={(e) => updateStoryContent(nodeId, e.target.value)}
           className={`story-text w-full${isStreaming ? ' cursor-blink' : ''}`}
           placeholder="这里是故事正文。在右侧对话栏输入创作指令，AI 将实时生成内容…"
           spellCheck={false}
+          readOnly={isStreaming}
           style={{
             overflow: 'hidden',
             resize: 'none',
