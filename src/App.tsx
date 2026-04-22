@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from './store'
 import { useProjectStore } from './projectStore'
-import { ApiFormat } from './types'
+import { ApiFormat, ApiCheckResult } from './types'
+import { checkApiConfig } from './api'
 import Toolbar from './components/Toolbar'
 import GlobalSettings from './components/GlobalSettings'
 import NodeGraph from './components/NodeGraph'
@@ -29,6 +30,8 @@ export default function App() {
   const [form, setForm] = useState({ key: '', url: '', model: '', format: 'anthropic' as ApiFormat })
   const [isDirty, setIsDirty] = useState(false)
   const [showNodeTrash, setShowNodeTrash] = useState(false)
+  const [checkResult, setCheckResult] = useState<ApiCheckResult | null>(null)
+  const [isChecking, setIsChecking] = useState(false)
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -93,11 +96,29 @@ export default function App() {
 
   const openModal = () => {
     setForm({ key: apiKey, url: apiUrl, model: apiModel, format: apiFormat })
+    setCheckResult(null)
     setModalOpen(true)
   }
 
   const handleFormatSwitch = (fmt: ApiFormat) =>
     setForm((f) => ({ ...f, format: fmt, url: FORMAT_DEFAULTS[fmt].url, model: FORMAT_DEFAULTS[fmt].model }))
+
+  const runApiCheck = async (cfg: { key: string; url: string; format: ApiFormat; model: string }) => {
+    setIsChecking(true)
+    setCheckResult(null)
+    try {
+      const r = await checkApiConfig({
+        apiKey: cfg.key.trim(),
+        apiUrl: cfg.url.trim() || FORMAT_DEFAULTS[cfg.format].url,
+        apiFormat: cfg.format,
+        apiModel: cfg.model.trim() || FORMAT_DEFAULTS[cfg.format].model,
+      })
+      setCheckResult(r)
+    } catch {
+      setCheckResult({ ok: false, connectivity: { ok: false, message: '检测异常' }, chat: { ok: false, message: '未检测' }, toolUse: { ok: false, message: '未检测' }, streaming: { ok: false, message: '未检测' } })
+    }
+    setIsChecking(false)
+  }
 
   const handleSave = () => {
     if (!form.key.trim()) return
@@ -105,7 +126,7 @@ export default function App() {
     setApiUrl(form.url.trim() || FORMAT_DEFAULTS[form.format].url)
     setApiFormat(form.format)
     setApiModel(form.model.trim() || FORMAT_DEFAULTS[form.format].model)
-    setModalOpen(false)
+    runApiCheck(form)
   }
 
   return (
@@ -171,13 +192,15 @@ export default function App() {
           className="fixed inset-0 z-50 flex items-center justify-center"
           style={{ background: 'rgba(10,9,18,0.88)', backdropFilter: 'blur(6px)' }}>
           <div
-            className="w-full max-w-md rounded"
+            className="w-full max-w-md flex flex-col rounded"
             style={{
               background: 'var(--bg-card)',
               border: '1px solid var(--border-gold)',
               boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+              maxHeight: 'min(85vh, calc(100vh - 64px))',
             }}>
-            <div className="flex items-center justify-between px-6 py-4"
+            {/* Header — flex-shrink-0 */}
+            <div className="flex-shrink-0 flex items-center justify-between px-6 py-4"
               style={{ borderBottom: '1px solid var(--border-subtle)' }}>
               <div>
                 <h2 className="font-serif text-xl" style={{ color: 'var(--text-primary)' }}>API 连接配置</h2>
@@ -189,68 +212,113 @@ export default function App() {
               )}
             </div>
 
-            <div className="px-6 py-5 space-y-5">
-              {/* Format */}
-              <div>
-                <label className="text-xs mb-2 block" style={{ color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', fontSize: '10px' }}>接口格式</label>
-                <div className="flex gap-2">
-                  {(['anthropic', 'openai'] as ApiFormat[]).map((fmt) => (
-                    <button key={fmt} onClick={() => handleFormatSwitch(fmt)}
-                      className="flex-1 py-2.5 rounded text-sm font-medium transition-all"
-                      style={{
-                        background: form.format === fmt ? 'var(--gold)' : 'var(--bg-elevated)',
-                        color: form.format === fmt ? '#0e0d15' : 'var(--text-muted)',
-                        border: `1px solid ${form.format === fmt ? 'var(--gold)' : 'var(--border-subtle)'}`,
-                      }}>
-                      {fmt === 'anthropic' ? 'Anthropic' : 'OpenAI 兼容'}
-                    </button>
-                  ))}
+            {/* Scrollable content — flex-1 min-h-0 */}
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <div className="px-6 py-5 space-y-5">
+                {/* Format */}
+                <div>
+                  <label className="text-xs mb-2 block" style={{ color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', fontSize: '10px' }}>接口格式</label>
+                  <div className="flex gap-2">
+                    {(['anthropic', 'openai'] as ApiFormat[]).map((fmt) => (
+                      <button key={fmt} onClick={() => handleFormatSwitch(fmt)}
+                        className="flex-1 py-2.5 rounded text-sm font-medium transition-all"
+                        style={{
+                          background: form.format === fmt ? 'var(--gold)' : 'var(--bg-elevated)',
+                          color: form.format === fmt ? '#0e0d15' : 'var(--text-muted)',
+                          border: `1px solid ${form.format === fmt ? 'var(--gold)' : 'var(--border-subtle)'}`,
+                        }}>
+                        {fmt === 'anthropic' ? 'Anthropic' : 'OpenAI 兼容'}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs mt-2" style={{ color: 'var(--text-muted)', fontSize: '11px', opacity: 0.7 }}>
+                    {form.format === 'anthropic' ? '适用于 Anthropic 官方 API 及兼容代理' : '适用于 OpenAI、Ollama、LM Studio、DeepSeek 等'}
+                  </p>
                 </div>
-                <p className="text-xs mt-2" style={{ color: 'var(--text-muted)', fontSize: '11px', opacity: 0.7 }}>
-                  {form.format === 'anthropic' ? '适用于 Anthropic 官方 API 及兼容代理' : '适用于 OpenAI、Ollama、LM Studio、DeepSeek 等'}
-                </p>
+
+                {/* URL */}
+                <div>
+                  <label className="text-xs mb-1.5 block" style={{ color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', fontSize: '10px' }}>API 地址</label>
+                  <input type="url" value={form.url} onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))}
+                    placeholder={FORMAT_DEFAULTS[form.format].url}
+                    className="w-full px-3 py-2.5 rounded text-sm outline-none"
+                    style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '12px' }} />
+                </div>
+
+                {/* Key */}
+                <div>
+                  <label className="text-xs mb-1.5 block" style={{ color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', fontSize: '10px' }}>API 密钥</label>
+                  <input type="password" value={form.key} onChange={(e) => setForm((f) => ({ ...f, key: e.target.value }))}
+                    placeholder={form.format === 'anthropic' ? 'sk-ant-…' : 'sk-…'}
+                    className="w-full px-3 py-2.5 rounded text-sm outline-none"
+                    style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '12px' }}
+                    autoFocus={!apiKey} />
+                </div>
+
+                {/* Model */}
+                <div>
+                  <label className="text-xs mb-1.5 block" style={{ color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', fontSize: '10px' }}>模型名称</label>
+                  <input type="text" value={form.model} onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
+                    placeholder={FORMAT_DEFAULTS[form.format].model}
+                    className="w-full px-3 py-2.5 rounded text-sm outline-none"
+                    style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '12px' }} />
+                </div>
               </div>
 
-              {/* URL */}
-              <div>
-                <label className="text-xs mb-1.5 block" style={{ color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', fontSize: '10px' }}>API 地址</label>
-                <input type="url" value={form.url} onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))}
-                  placeholder={FORMAT_DEFAULTS[form.format].url}
-                  className="w-full px-3 py-2.5 rounded text-sm outline-none"
-                  style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '12px' }} />
-              </div>
-
-              {/* Key */}
-              <div>
-                <label className="text-xs mb-1.5 block" style={{ color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', fontSize: '10px' }}>API 密钥</label>
-                <input type="password" value={form.key} onChange={(e) => setForm((f) => ({ ...f, key: e.target.value }))}
-                  placeholder={form.format === 'anthropic' ? 'sk-ant-…' : 'sk-…'}
-                  className="w-full px-3 py-2.5 rounded text-sm outline-none"
-                  style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '12px' }}
-                  autoFocus={!apiKey} />
-              </div>
-
-              {/* Model */}
-              <div>
-                <label className="text-xs mb-1.5 block" style={{ color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', fontSize: '10px' }}>模型名称</label>
-                <input type="text" value={form.model} onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
-                  placeholder={FORMAT_DEFAULTS[form.format].model}
-                  className="w-full px-3 py-2.5 rounded text-sm outline-none"
-                  style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '12px' }} />
-              </div>
+              {/* Check results — inside scrollable area */}
+              {(isChecking || checkResult) && (
+                <div className="px-6 py-4 space-y-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-medium" style={{ color: 'var(--text-primary)', letterSpacing: '0.06em', textTransform: 'uppercase', fontSize: '10px' }}>
+                      连接检测
+                    </span>
+                    {isChecking && <span className="text-xs generating-pulse" style={{ color: 'var(--gold)', fontSize: '11px' }}>检测中…</span>}
+                  </div>
+                  {checkResult && (
+                    <>
+                      {([
+                        ['连接性', checkResult.connectivity],
+                        ['基础对话', checkResult.chat],
+                        ['Function Call', checkResult.toolUse],
+                        ['流式输出', checkResult.streaming],
+                      ] as [string, { ok: boolean; message: string }][]).map(([label, item]) => (
+                        <div key={label} className="flex items-start gap-2 text-xs">
+                          <span className="flex-shrink-0 mt-0.5" style={{ color: item.ok ? 'rgba(80,160,80,0.9)' : 'rgba(200,120,60,0.9)', fontSize: '12px' }}>
+                            ●
+                          </span>
+                          <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>
+                            <span style={{ color: 'var(--text-primary)' }}>{label}：</span>{item.message}
+                          </span>
+                        </div>
+                      ))}
+                      {checkResult.ok && (
+                        <div className="text-xs mt-2 px-2 py-1.5 rounded" style={{ background: 'rgba(80,160,80,0.08)', color: 'rgba(80,160,80,0.9)', fontSize: '11px' }}>
+                          配置验证通过，可以正常使用
+                        </div>
+                      )}
+                      {!checkResult.ok && checkResult.connectivity.ok && (
+                        <div className="text-xs mt-2 px-2 py-1.5 rounded" style={{ background: 'rgba(200,120,60,0.08)', color: 'rgba(200,120,60,0.9)', fontSize: '11px' }}>
+                          部分功能受限，但仍可使用（将自动降级）
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
 
-            <div className="flex gap-3 px-6 py-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-              <button onClick={handleSave} disabled={!form.key.trim()}
+            {/* Footer buttons — flex-shrink-0, always visible */}
+            <div className="flex-shrink-0 flex gap-3 px-6 py-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+              <button onClick={handleSave} disabled={!form.key.trim() || isChecking}
                 className="flex-1 py-2.5 rounded text-sm font-medium transition-all"
-                style={{ background: form.key.trim() ? 'var(--gold)' : 'var(--bg-elevated)', color: form.key.trim() ? '#0e0d15' : 'var(--text-muted)' }}>
-                保存配置
+                style={{ background: form.key.trim() && !isChecking ? 'var(--gold)' : 'var(--bg-elevated)', color: form.key.trim() && !isChecking ? '#0e0d15' : 'var(--text-muted)' }}>
+                {isChecking ? '检测中…' : checkResult ? '重新保存并检测' : '保存并检测'}
               </button>
-              {apiKey && (
-                <button onClick={() => setModalOpen(false)}
+              {(apiKey || checkResult?.ok) && (
+                <button onClick={() => { setModalOpen(false); setCheckResult(null) }}
                   className="px-4 py-2.5 rounded text-sm hover:opacity-70 transition-all"
                   style={{ border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
-                  取消
+                  {checkResult?.ok ? '完成' : '取消'}
                 </button>
               )}
             </div>

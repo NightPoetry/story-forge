@@ -56,6 +56,7 @@ interface AppStore {
   editorFontSize: number
   editorLineHeight: number
   editorLetterSpacing: number
+  soundEnabled: boolean
 
   // Story actions
   resetWithProjectData: (nodes: Record<string, StoryNodeData>, rootNodeId: string | null, writingGuide?: string, writingGuideChatHistory?: ChatMessage[], trashedNodes?: TrashedNodeGroup[]) => void
@@ -97,6 +98,7 @@ interface AppStore {
   setEditorFontSize: (v: number) => void
   setEditorLineHeight: (v: number) => void
   setEditorLetterSpacing: (v: number) => void
+  setSoundEnabled: (v: boolean) => void
 
   // Helpers
   getAncestorChain: (nodeId: string) => StoryNodeData[]
@@ -132,6 +134,7 @@ export const useStore = create<AppStore>()(
       editorFontSize: 18,
       editorLineHeight: 1.9,
       editorLetterSpacing: 0.01,
+      soundEnabled: true,
 
       resetWithProjectData: (nodes, rootNodeId, writingGuide = '', writingGuideChatHistory = [], trashedNodes = []) =>
         set({ nodes, rootNodeId, selectedNodeId: rootNodeId, editingNodeId: null, isGenerating: false, projectWritingGuide: writingGuide, writingGuideChatHistory, trashedNodes, undoStack: [], redoStack: [] }),
@@ -356,6 +359,7 @@ export const useStore = create<AppStore>()(
       setEditorFontSize: (v) => set({ editorFontSize: v }),
       setEditorLineHeight: (v) => set({ editorLineHeight: v }),
       setEditorLetterSpacing: (v) => set({ editorLetterSpacing: v }),
+      setSoundEnabled: (v) => set({ soundEnabled: v }),
 
       getAncestorChain: (nodeId) => {
         const nodes = get().nodes
@@ -393,6 +397,7 @@ export const useStore = create<AppStore>()(
         editorLineHeight: s.editorLineHeight,
         editorLetterSpacing: s.editorLetterSpacing,
         autoSave: s.autoSave,
+        soundEnabled: s.soundEnabled,
       }),
     },
   ),

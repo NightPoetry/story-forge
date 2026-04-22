@@ -41,12 +41,16 @@ export default function StoryPanel({ nodeId, isStreaming }: Props) {
   const [targetInput, setTargetInput] = useState('')
   const [showTypography, setShowTypography] = useState(false)
   const typographyRef = useRef<HTMLDivElement>(null)
+  const rafRef = useRef<number>(0)
 
   useEffect(() => {
     const el = textareaRef.current
     if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${el.scrollHeight}px`
+    cancelAnimationFrame(rafRef.current)
+    rafRef.current = requestAnimationFrame(() => {
+      el.style.height = 'auto'
+      el.style.height = `${el.scrollHeight}px`
+    })
   }, [node?.storyContent])
 
   useEffect(() => {
@@ -122,6 +126,7 @@ export default function StoryPanel({ nodeId, isStreaming }: Props) {
       {/* Scrollable story area */}
       <div className="flex-1 overflow-y-auto px-6 sm:px-10 py-6">
         <textarea
+          id="story-textarea"
           ref={textareaRef}
           value={node.storyContent}
           onChange={(e) => updateStoryContent(nodeId, e.target.value)}

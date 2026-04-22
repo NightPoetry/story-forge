@@ -19,11 +19,11 @@ export default function NodeEditor({ nodeId, isDirty, onManualSave }: Props) {
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !showGuide) setEditingNode(null)
+      if (e.key === 'Escape' && !showGuide && !isStreaming) setEditingNode(null)
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [setEditingNode, showGuide])
+  }, [setEditingNode, showGuide, isStreaming])
 
   if (!node) return null
 
@@ -79,11 +79,14 @@ export default function NodeEditor({ nodeId, isDirty, onManualSave }: Props) {
           <div className="flex items-center gap-1.5 flex-shrink-0">
             <button
               onClick={handleContinue}
+              disabled={isStreaming}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs transition-all hover:opacity-80"
               style={{
                 color: 'var(--gold)',
                 border: '1px solid var(--border-gold)',
                 fontSize: '11px',
+                opacity: isStreaming ? 0.35 : 1,
+                pointerEvents: isStreaming ? 'none' : 'auto',
               }}>
               <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
                 <path d="M5 1v8M1 6l4 3 4-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
@@ -92,11 +95,14 @@ export default function NodeEditor({ nodeId, isDirty, onManualSave }: Props) {
             </button>
             <button
               onClick={handleBranch}
+              disabled={isStreaming}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs transition-all hover:opacity-80"
               style={{
                 color: '#5080a8',
                 border: '1px solid var(--border-slate)',
                 fontSize: '11px',
+                opacity: isStreaming ? 0.35 : 1,
+                pointerEvents: isStreaming ? 'none' : 'auto',
               }}>
               <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
                 <path d="M5 1v3M2 8V6l3-2 3 2v2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
@@ -130,11 +136,14 @@ export default function NodeEditor({ nodeId, isDirty, onManualSave }: Props) {
             <div style={{ width: '1px', height: '16px', background: 'var(--border-subtle)', margin: '0 2px' }} />
 
             <button
-              onClick={() => setEditingNode(null)}
+              onClick={() => !isStreaming && setEditingNode(null)}
+              disabled={isStreaming}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs transition-all hover:opacity-70"
               style={{
                 color: 'var(--text-muted)',
                 border: '1px solid var(--border-subtle)',
+                opacity: isStreaming ? 0.35 : 1,
+                pointerEvents: isStreaming ? 'none' : 'auto',
                 fontSize: '11px',
               }}>
               <svg width="10" height="10" viewBox="0 0 10 10" fill="none">

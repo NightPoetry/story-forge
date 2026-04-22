@@ -1,4 +1,5 @@
-import { ApiFormat, ChatMessage, StoryNodeData } from './types'
+import { ApiFormat, ApiCheckResult, ChatMessage, StoryNodeData } from './types'
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 
 export const genId = () =>
   `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`
@@ -16,6 +17,11 @@ function resolveAnthropicBase(apiUrl: string): string {
     base === 'https://api.anthropic.com' || base === 'http://api.anthropic.com'
   if (isOfficial && !isTauri()) return '/api/anthropic'
   return base
+}
+
+// Normalize OpenAI-compatible base URL: strip trailing /v1, /v1/, etc.
+function resolveOpenAIBase(apiUrl: string): string {
+  return apiUrl.replace(/\/$/, '').replace(/\/v1$/, '')
 }
 
 // ── Prompt builders ────────────────────────────────────────────────────────
@@ -249,6 +255,72 @@ function openaiHeaders(apiKey: string) {
   }
 }
 
+// ── SSE transport layer ──────────────────────────────────────────────────
+// WKWebView (Tauri) buffers fetch ReadableStream — the entire response arrives
+// at once, breaking real-time streaming. In Tauri we use @tauri-apps/plugin-http
+// whose fetch() goes through Rust's reqwest, bypassing WKWebView networking
+// entirely and delivering chunks as they arrive from the server.
+// If the plugin's URL scope rejects the URL, we fall back to native fetch.
+
+type SSEResult = { ok: true } | { ok: false; status: number; message: string }
+
+async function doStreamFetch(
+  url: string,
+  headers: Record<string, string>,
+  body: string,
+  signal?: AbortSignal,
+): Promise<Response> {
+  if (isTauri()) {
+    try {
+      return await tauriFetch(url, { method: 'POST', headers, signal, body })
+    } catch (e) {
+      // Scope error or plugin issue → fall back to native fetch
+      if ((e as Error).name === 'AbortError') throw e
+      console.warn('[tauri-http] falling back to native fetch:', (e as Error).message)
+    }
+  }
+  return await fetch(url, { method: 'POST', headers, signal, body })
+}
+
+async function postSSE(
+  url: string,
+  headers: Record<string, string>,
+  body: object,
+  onData: (raw: string) => void,
+  signal?: AbortSignal,
+): Promise<SSEResult> {
+  let res: Response
+  try {
+    res = await doStreamFetch(url, headers, JSON.stringify(body), signal)
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') throw e
+    throw new Error((e as Error).message || 'Network error')
+  }
+
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({})) as { error?: { message?: string } }
+    return { ok: false, status: res.status, message: errBody.error?.message || `HTTP ${res.status}` }
+  }
+
+  const reader = res.body!.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (signal?.aborted) { reader.cancel(); break }
+    buf += decoder.decode(value, { stream: true })
+    const lines = buf.split('\n')
+    buf = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      const raw = line.slice(6).trim()
+      if (raw && raw !== '[DONE]') onData(raw)
+    }
+  }
+  return { ok: true }
+}
+
 // ── Intelligent generation (single request, tool use) ────────────────────
 
 export async function runIntelligentGeneration(
@@ -276,7 +348,7 @@ export async function runIntelligentGeneration(
     )
   } else {
     await runOpenAIToolUse(
-      cfg, fullSystem, messages, tools, onAction, onComplete, onError, signal,
+      cfg, fullSystem, messages, tools, onAction, onToolStart, onComplete, onError, signal, onStreamDelta,
     )
   }
 }
@@ -296,65 +368,19 @@ async function runAnthropicStreamingToolUse(
   onStreamDelta?: (toolName: string, text: string) => void,
 ) {
   const base = resolveAnthropicBase(cfg.apiUrl)
-  let res: Response
-  try {
-    res = await fetch(`${base}/v1/messages`, {
-      method: 'POST',
-      headers: anthropicHeaders(cfg.apiKey),
-      signal,
-      body: JSON.stringify({
-        model: cfg.apiModel,
-        max_tokens: 4096,
-        stream: true,
-        system: systemPrompt,
-        messages,
-        tools,
-      }),
-    })
-  } catch (e) {
-    if ((e as Error).name === 'AbortError') return
-    onError(e instanceof Error ? e.message : 'Network error')
-    return
-  }
-
-  if (!res.ok) {
-    const errBody = await res.json().catch(() => ({}))
-    onError(
-      (errBody as { error?: { message?: string } }).error?.message ||
-        `HTTP ${res.status}`,
-    )
-    return
-  }
-
-  const reader = res.body!.getReader()
-  const decoder = new TextDecoder()
-  let buf = ''
-
   type BlockInfo = { name: string; buf: string }
   const blocks = new Map<number, BlockInfo>()
   let hasChatReply = false
 
+  let result: SSEResult
   try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      if (signal?.aborted) {
-        reader.cancel()
-        break
-      }
-
-      buf += decoder.decode(value, { stream: true })
-      const lines = buf.split('\n')
-      buf = lines.pop() ?? ''
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        const raw = line.slice(6).trim()
-        if (!raw) continue
-
+    result = await postSSE(
+      `${base}/v1/messages`,
+      anthropicHeaders(cfg.apiKey),
+      { model: cfg.apiModel, max_tokens: 4096, stream: true, system: systemPrompt, messages, tools },
+      (raw) => {
         let evt: Record<string, unknown>
-        try { evt = JSON.parse(raw) as Record<string, unknown> } catch { continue }
-
+        try { evt = JSON.parse(raw) as Record<string, unknown> } catch { return }
         const evtType = evt.type as string
 
         if (evtType === 'content_block_start') {
@@ -364,7 +390,6 @@ async function runAnthropicStreamingToolUse(
             onToolStart(block.name)
           }
         }
-
         if (evtType === 'content_block_delta') {
           const delta = evt.delta as { type: string; partial_json?: string } | undefined
           if (delta?.type === 'input_json_delta' && delta.partial_json) {
@@ -384,37 +409,29 @@ async function runAnthropicStreamingToolUse(
             }
           }
         }
-
         if (evtType === 'content_block_stop') {
           const block = blocks.get(evt.index as number)
           if (block) {
             try {
               const input = JSON.parse(block.buf) as Record<string, string>
-              if (block.name === 'write_story') {
-                onAction({ type: 'write_story', content: input.content ?? '' })
-              } else if (block.name === 'update_state_card') {
-                onAction({ type: 'update_state_card', content: input.content ?? '' })
-              } else if (block.name === 'chat_reply') {
-                onAction({ type: 'chat_reply', content: input.message ?? '' })
-                hasChatReply = true
-              } else if (block.name === 'collect_foreshadowing') {
-                onAction({ type: 'collect_foreshadowing', id: input.id ?? '', revealNote: input.reveal_note ?? '' })
-              }
+              if (block.name === 'write_story') onAction({ type: 'write_story', content: input.content ?? '' })
+              else if (block.name === 'update_state_card') onAction({ type: 'update_state_card', content: input.content ?? '' })
+              else if (block.name === 'chat_reply') { onAction({ type: 'chat_reply', content: input.message ?? '' }); hasChatReply = true }
+              else if (block.name === 'collect_foreshadowing') onAction({ type: 'collect_foreshadowing', id: input.id ?? '', revealNote: input.reveal_note ?? '' })
             } catch { /* ignore parse error */ }
           }
         }
-      }
-    }
+      },
+      signal,
+    )
   } catch (e) {
-    if ((e as Error).name !== 'AbortError') {
-      onError(e instanceof Error ? e.message : 'Stream error')
-    }
+    if ((e as Error).name === 'AbortError') return
+    onError(e instanceof Error ? e.message : 'Stream error')
     return
   }
 
-  if (!hasChatReply && !signal?.aborted) {
-    onAction({ type: 'chat_reply', content: '已处理您的请求。' })
-  }
+  if (!result.ok) { onError(result.message); return }
+  if (!hasChatReply && !signal?.aborted) onAction({ type: 'chat_reply', content: '已处理您的请求。' })
   if (!signal?.aborted) onComplete()
 }
 
@@ -426,144 +443,245 @@ async function runOpenAIToolUse(
   messages: { role: 'user' | 'assistant'; content: string }[],
   tools: readonly { name: string; description: string; input_schema: { type: 'object'; properties: Record<string, unknown>; required: string[] } }[],
   onAction: (action: AIAction) => void,
+  onToolStart: (toolName: string) => void,
   onComplete: () => void,
   onError: (err: string) => void,
   signal?: AbortSignal,
+  onStreamDelta?: (toolName: string, text: string) => void,
 ) {
-  const base = cfg.apiUrl.replace(/\/$/, '')
+  const base = resolveOpenAIBase(cfg.apiUrl)
   const openAITools = tools.map((t) => ({
     type: 'function' as const,
     function: { name: t.name, description: t.description, parameters: t.input_schema },
   }))
 
-  let res: Response
+  let plainContent = ''
+  type ToolAccum = { index: number; name: string; argBuf: string }
+  const toolAccums = new Map<number, ToolAccum>()
+
+  let result: SSEResult
   try {
-    res = await fetch(`${base}/v1/chat/completions`, {
-      method: 'POST',
-      headers: openaiHeaders(cfg.apiKey),
-      signal,
-      body: JSON.stringify({
-        model: cfg.apiModel,
+    result = await postSSE(
+      `${base}/v1/chat/completions`,
+      openaiHeaders(cfg.apiKey),
+      {
+        model: cfg.apiModel, stream: true,
         messages: [{ role: 'system', content: systemPrompt }, ...messages],
-        tools: openAITools,
-        tool_choice: 'auto',
-      }),
-    })
+        tools: openAITools, tool_choice: 'auto',
+      },
+      (raw) => {
+        let evt: Record<string, unknown>
+        try { evt = JSON.parse(raw) as Record<string, unknown> } catch { return }
+        const choice = (evt.choices as { delta: Record<string, unknown>; finish_reason?: string }[])?.[0]
+        if (!choice) return
+        const delta = choice.delta
+
+        if (typeof delta.content === 'string' && delta.content) plainContent += delta.content
+
+        const tcDeltas = delta.tool_calls as { index: number; function?: { name?: string; arguments?: string } }[] | undefined
+        if (tcDeltas) {
+          for (const tcd of tcDeltas) {
+            let accum = toolAccums.get(tcd.index)
+            if (!accum) {
+              const name = tcd.function?.name ?? ''
+              accum = { index: tcd.index, name, argBuf: '' }
+              toolAccums.set(tcd.index, accum)
+              if (name) onToolStart(name)
+            }
+            if (tcd.function?.name && !accum.name) { accum.name = tcd.function.name; onToolStart(accum.name) }
+            if (tcd.function?.arguments) {
+              accum.argBuf += tcd.function.arguments
+              if (onStreamDelta) {
+                const streamKey = accum.name === 'write_story' ? 'content' : accum.name === 'update_state_card' ? 'content' : null
+                if (streamKey) {
+                  const text = extractPartialStringValue(accum.argBuf, streamKey)
+                  if (text !== null) onStreamDelta(accum.name, text)
+                }
+              }
+            }
+          }
+        }
+      },
+      signal,
+    )
   } catch (e) {
     if ((e as Error).name === 'AbortError') return
-    onError(e instanceof Error ? e.message : 'Network error')
+    onError(e instanceof Error ? e.message : 'Stream error')
     return
   }
 
-  if (!res.ok) {
-    const errBody = await res.json().catch(() => ({}))
-    const msg =
-      (errBody as { error?: { message?: string } }).error?.message ||
-      `HTTP ${res.status}`
-    // Fallback for models without tool support
-    if (res.status === 400) {
-      await runOpenAIPlainFallback(cfg, systemPrompt, messages, onAction, onComplete, onError, signal)
+  if (!result.ok) {
+    if ([400, 500, 422].includes(result.status)) {
+      await runOpenAIPlainFallback(cfg, systemPrompt, messages, onAction, onToolStart, onComplete, onError, signal, onStreamDelta)
       return
     }
-    onError(msg)
+    onError(result.message)
     return
   }
 
-  type ToolCall = { function: { name: string; arguments: string } }
-  type OAIResponse = { choices?: { message: { tool_calls?: ToolCall[]; content?: string } }[] }
-  const data = await res.json() as OAIResponse
-  const message = data.choices?.[0]?.message
-  const toolCalls = message?.tool_calls ?? []
-  let hasChatReply = false
+  if (signal?.aborted) return
 
-  for (const tc of toolCalls) {
+  let hasChatReply = false
+  for (const accum of toolAccums.values()) {
     try {
-      const args = JSON.parse(tc.function.arguments) as Record<string, string>
-      if (tc.function.name === 'write_story') {
-        onAction({ type: 'write_story', content: args.content ?? '' })
-      } else if (tc.function.name === 'update_state_card') {
-        onAction({ type: 'update_state_card', content: args.content ?? '' })
-      } else if (tc.function.name === 'chat_reply') {
-        onAction({ type: 'chat_reply', content: args.message ?? '' })
-        hasChatReply = true
-      } else if (tc.function.name === 'collect_foreshadowing') {
-        onAction({ type: 'collect_foreshadowing', id: args.id ?? '', revealNote: args.reveal_note ?? '' })
-      }
+      const args = JSON.parse(accum.argBuf) as Record<string, string>
+      if (accum.name === 'write_story') onAction({ type: 'write_story', content: args.content ?? '' })
+      else if (accum.name === 'update_state_card') onAction({ type: 'update_state_card', content: args.content ?? '' })
+      else if (accum.name === 'chat_reply') { onAction({ type: 'chat_reply', content: args.message ?? '' }); hasChatReply = true }
+      else if (accum.name === 'collect_foreshadowing') onAction({ type: 'collect_foreshadowing', id: args.id ?? '', revealNote: args.reveal_note ?? '' })
     } catch { /* ignore */ }
   }
 
-  if (toolCalls.length === 0 && message?.content) {
-    onAction({ type: 'write_story', content: message.content })
-  }
-  if (!hasChatReply) {
-    onAction({ type: 'chat_reply', content: '已处理您的请求。' })
-  }
+  if (toolAccums.size === 0 && plainContent.trim()) onAction({ type: 'write_story', content: plainContent.trim() })
+  if (!hasChatReply) onAction({ type: 'chat_reply', content: '已处理您的请求。' })
   onComplete()
 }
 
 // ── OpenAI plain streaming fallback (models without tool support) ─────────
+
+const PLAIN_OUTPUT_INSTRUCTIONS = `
+
+## 输出格式（严格遵守）
+
+你没有工具可调用，请用XML标签包裹输出。可以同时输出多个标签。
+
+写故事/续写/修改情节时：
+<write_story>
+完整故事正文，直接输出内容，不含标题、解释或任何格式标记
+</write_story>
+
+更新状态卡片时（故事有重要变化，或用户要求建立设定/世界观/人物）：
+<update_state_card>
+状态卡片全文，涵盖人物/地点/时间/关键事件
+</update_state_card>
+
+回收伏笔时（仅当伏笔档案有待回收项）：
+<collect_foreshadowing id="F1" reveal_note="如何揭示的说明" />
+
+最后必须附上简短说明：
+<chat_reply>
+1-3句说明你做了什么
+</chat_reply>
+
+如果用户的要求只需要对话回复（如闲聊、提问），只输出 <chat_reply> 即可。`
+
+function parsePlainActions(text: string): AIAction[] {
+  const actions: AIAction[] = []
+
+  const extractTag = (tag: string): string | null => {
+    // Match both <tag>content</tag> and <tag>\ncontent\n</tag>, greedy within each tag
+    const re = new RegExp(`<${tag}>\\s*([\\s\\S]*?)\\s*</${tag}>`, 'g')
+    let match
+    let last: string | null = null
+    while ((match = re.exec(text)) !== null) {
+      last = match[1].trim()
+    }
+    return last
+  }
+
+  const story = extractTag('write_story')
+  if (story) actions.push({ type: 'write_story', content: story })
+
+  const stateCard = extractTag('update_state_card')
+  if (stateCard) actions.push({ type: 'update_state_card', content: stateCard })
+
+  // <collect_foreshadowing id="F1" reveal_note="..." /> or with closing tag
+  const fRe = /<collect_foreshadowing\s+id="([^"]*?)"\s+reveal_note="([^"]*?)"\s*\/?>/g
+  let fm
+  while ((fm = fRe.exec(text)) !== null) {
+    actions.push({ type: 'collect_foreshadowing', id: fm[1], revealNote: fm[2] })
+  }
+
+  const chatReply = extractTag('chat_reply')
+  if (chatReply) actions.push({ type: 'chat_reply', content: chatReply })
+
+  return actions
+}
 
 async function runOpenAIPlainFallback(
   cfg: ApiConfig,
   systemPrompt: string,
   messages: { role: 'user' | 'assistant'; content: string }[],
   onAction: (action: AIAction) => void,
+  onToolStart: (toolName: string) => void,
   onComplete: () => void,
   onError: (err: string) => void,
   signal?: AbortSignal,
+  onStreamDelta?: (toolName: string, text: string) => void,
 ) {
-  const base = cfg.apiUrl.replace(/\/$/, '')
-  let res: Response
+  const base = resolveOpenAIBase(cfg.apiUrl)
+  let full = ''
+  const STREAMABLE_TAGS = ['write_story', 'update_state_card', 'chat_reply'] as const
+  let currentTag: string | null = null
+  const notifiedTags = new Set<string>()
+
+  let result: SSEResult
   try {
-    res = await fetch(`${base}/v1/chat/completions`, {
-      method: 'POST',
-      headers: openaiHeaders(cfg.apiKey),
+    result = await postSSE(
+      `${base}/v1/chat/completions`,
+      openaiHeaders(cfg.apiKey),
+      {
+        model: cfg.apiModel, stream: true,
+        messages: [{ role: 'system', content: systemPrompt + PLAIN_OUTPUT_INSTRUCTIONS }, ...messages],
+      },
+      (raw) => {
+        try {
+          const evt = JSON.parse(raw) as { choices?: { delta: { content?: string } }[] }
+          const delta = evt?.choices?.[0]?.delta?.content
+          if (typeof delta !== 'string') return
+          full += delta
+          if (!onStreamDelta) return
+
+          if (currentTag === null) {
+            for (const tag of STREAMABLE_TAGS) {
+              const idx = full.indexOf(`<${tag}>`)
+              if (idx !== -1) {
+                currentTag = tag
+                if (!notifiedTags.has(tag)) { onToolStart(tag); notifiedTags.add(tag) }
+                break
+              }
+            }
+          } else {
+            const openTag = `<${currentTag}>`
+            const closeTag = `</${currentTag}>`
+            const startIdx = full.indexOf(openTag) + openTag.length
+            const endIdx = full.indexOf(closeTag, startIdx)
+            if (endIdx !== -1) {
+              onStreamDelta(currentTag, full.slice(startIdx, endIdx).replace(/^\s+/, ''))
+              currentTag = null
+              for (const tag of STREAMABLE_TAGS) {
+                const nextIdx = full.indexOf(`<${tag}>`, endIdx)
+                if (nextIdx !== -1 && full.indexOf(`</${tag}>`, nextIdx) === -1) {
+                  currentTag = tag
+                  if (!notifiedTags.has(tag)) { onToolStart(tag); notifiedTags.add(tag) }
+                  break
+                }
+              }
+            } else {
+              onStreamDelta(currentTag, full.slice(startIdx).replace(/^\s+/, ''))
+            }
+          }
+        } catch { /* ignore */ }
+      },
       signal,
-      body: JSON.stringify({
-        model: cfg.apiModel,
-        stream: true,
-        messages: [
-          { role: 'system', content: systemPrompt + '\n\n直接输出故事正文，不含标题或解释。' },
-          ...messages,
-        ],
-      }),
-    })
+    )
   } catch (e) {
     if ((e as Error).name === 'AbortError') return
-    onError(e instanceof Error ? e.message : 'Network error')
+    onError(e instanceof Error ? e.message : 'Stream error')
     return
   }
 
-  if (!res.ok) { onError(`HTTP ${res.status}`); return }
+  if (!result.ok) { onError(result.message); return }
+  if (signal?.aborted) return
 
-  const reader = res.body!.getReader()
-  const decoder = new TextDecoder()
-  let buf = ''
-  let full = ''
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done || signal?.aborted) break
-    buf += decoder.decode(value, { stream: true })
-    const lines = buf.split('\n')
-    buf = lines.pop() ?? ''
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue
-      const raw = line.slice(6).trim()
-      if (!raw || raw === '[DONE]') continue
-      try {
-        const evt = JSON.parse(raw) as { choices?: { delta: { content?: string } }[] }
-        const delta = evt?.choices?.[0]?.delta?.content
-        if (typeof delta === 'string') full += delta
-      } catch { /* ignore */ }
-    }
+  const actions = parsePlainActions(full)
+  if (actions.length > 0) {
+    for (const a of actions) onAction(a)
+    if (!actions.some((a) => a.type === 'chat_reply')) onAction({ type: 'chat_reply', content: '已处理您的请求。' })
+  } else {
+    onAction({ type: 'chat_reply', content: `⚠ XML解析失败：模型未按预期格式输出，未做任何更新。\n\n原始输出：\n${full.trim().slice(0, 500)}` })
   }
-
-  if (!signal?.aborted) {
-    onAction({ type: 'write_story', content: full })
-    onAction({ type: 'chat_reply', content: '已根据指示更新故事内容。' })
-    onComplete()
-  }
+  onComplete()
 }
 
 // ── Settings guide chat ────────────────────────────────────────────────────
@@ -631,46 +749,19 @@ export async function runSettingsGuideChat(
 
   if (cfg.apiFormat === 'anthropic') {
     const base = resolveAnthropicBase(cfg.apiUrl)
-    let res: Response
-    try {
-      res = await fetch(`${base}/v1/messages`, {
-        method: 'POST',
-        headers: anthropicHeaders(cfg.apiKey),
-        signal,
-        body: JSON.stringify({ model: cfg.apiModel, max_tokens: 2048, stream: true, system: systemPrompt, messages, tools }),
-      })
-    } catch (e) {
-      if ((e as Error).name === 'AbortError') return
-      onError(e instanceof Error ? e.message : 'Network error')
-      return
-    }
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}))
-      onError((errBody as { error?: { message?: string } }).error?.message || `HTTP ${res.status}`)
-      return
-    }
-
-    const reader = res.body!.getReader()
-    const decoder = new TextDecoder()
-    let buf = ''
     type BlockInfo = { name: string; buf: string }
     const blocks = new Map<number, BlockInfo>()
     let hasChatReply = false
 
+    let result: SSEResult
     try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        if (signal?.aborted) { reader.cancel(); break }
-        buf += decoder.decode(value, { stream: true })
-        const lines = buf.split('\n')
-        buf = lines.pop() ?? ''
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          const raw = line.slice(6).trim()
-          if (!raw) continue
+      result = await postSSE(
+        `${base}/v1/messages`,
+        anthropicHeaders(cfg.apiKey),
+        { model: cfg.apiModel, max_tokens: 2048, stream: true, system: systemPrompt, messages, tools },
+        (raw) => {
           let evt: Record<string, unknown>
-          try { evt = JSON.parse(raw) as Record<string, unknown> } catch { continue }
+          try { evt = JSON.parse(raw) as Record<string, unknown> } catch { return }
           const evtType = evt.type as string
           if (evtType === 'content_block_start') {
             const block = evt.content_block as { type: string; name?: string } | undefined
@@ -694,49 +785,73 @@ export async function runSettingsGuideChat(
             if (block) {
               try {
                 const input = JSON.parse(block.buf) as Record<string, string>
-                if (block.name === 'update_guide') {
-                  onAction({ type: 'update_guide', content: input.content ?? '' })
-                } else if (block.name === 'chat_reply') {
-                  onAction({ type: 'chat_reply', content: input.message ?? '' })
-                  hasChatReply = true
-                }
-              } catch { /* ignore parse error */ }
+                if (block.name === 'update_guide') onAction({ type: 'update_guide', content: input.content ?? '' })
+                else if (block.name === 'chat_reply') { onAction({ type: 'chat_reply', content: input.message ?? '' }); hasChatReply = true }
+              } catch { /* ignore */ }
             }
           }
-        }
-      }
+        },
+        signal,
+      )
     } catch (e) {
-      if ((e as Error).name !== 'AbortError') onError(e instanceof Error ? e.message : 'Stream error')
+      if ((e as Error).name === 'AbortError') return
+      onError(e instanceof Error ? e.message : 'Stream error')
       return
     }
 
+    if (!result.ok) { onError(result.message); return }
     if (!hasChatReply && !signal?.aborted) onAction({ type: 'chat_reply', content: '已记录。' })
     if (!signal?.aborted) onComplete()
   } else {
-    // OpenAI non-streaming path
-    const base = cfg.apiUrl.replace(/\/$/, '')
+    const base = resolveOpenAIBase(cfg.apiUrl)
     const openAITools = tools.map((t) => ({ type: 'function' as const, function: { name: t.name, description: t.description, parameters: t.input_schema } }))
-    let res: Response
+    type ToolAccum = { name: string; argBuf: string }
+    const toolAccums = new Map<number, ToolAccum>()
+
+    let result: SSEResult
     try {
-      res = await fetch(`${base}/v1/chat/completions`, {
-        method: 'POST', headers: openaiHeaders(cfg.apiKey), signal,
-        body: JSON.stringify({ model: cfg.apiModel, messages: [{ role: 'system', content: systemPrompt }, ...messages], tools: openAITools, tool_choice: 'auto' }),
-      })
+      result = await postSSE(
+        `${base}/v1/chat/completions`,
+        openaiHeaders(cfg.apiKey),
+        { model: cfg.apiModel, stream: true, messages: [{ role: 'system', content: systemPrompt }, ...messages], tools: openAITools, tool_choice: 'auto' },
+        (raw) => {
+          let evt: Record<string, unknown>
+          try { evt = JSON.parse(raw) as Record<string, unknown> } catch { return }
+          const choice = (evt.choices as { delta: Record<string, unknown> }[])?.[0]
+          if (!choice) return
+          const tcDeltas = choice.delta.tool_calls as { index: number; function?: { name?: string; arguments?: string } }[] | undefined
+          if (tcDeltas) {
+            for (const tcd of tcDeltas) {
+              let accum = toolAccums.get(tcd.index)
+              if (!accum) { accum = { name: tcd.function?.name ?? '', argBuf: '' }; toolAccums.set(tcd.index, accum) }
+              if (tcd.function?.name && !accum.name) accum.name = tcd.function.name
+              if (tcd.function?.arguments) {
+                accum.argBuf += tcd.function.arguments
+                if (onStreamDelta && accum.name === 'update_guide') {
+                  const text = extractPartialStringValue(accum.argBuf, 'content')
+                  if (text !== null) onStreamDelta('update_guide', text)
+                }
+              }
+            }
+          }
+        },
+        signal,
+      )
     } catch (e) {
       if ((e as Error).name === 'AbortError') return
-      onError(e instanceof Error ? e.message : 'Network error')
+      onError(e instanceof Error ? e.message : 'Stream error')
       return
     }
-    if (!res.ok) { onError(`HTTP ${res.status}`); return }
-    type ToolCall = { function: { name: string; arguments: string } }
-    type OAIResponse = { choices?: { message: { tool_calls?: ToolCall[]; content?: string } }[] }
-    const data = await res.json() as OAIResponse
+
+    if (!result.ok) { onError(result.message); return }
+    if (signal?.aborted) return
+
     let hasChatReply = false
-    for (const tc of data.choices?.[0]?.message.tool_calls ?? []) {
+    for (const accum of toolAccums.values()) {
       try {
-        const args = JSON.parse(tc.function.arguments) as Record<string, string>
-        if (tc.function.name === 'update_guide') onAction({ type: 'update_guide', content: args.content ?? '' })
-        else if (tc.function.name === 'chat_reply') { onAction({ type: 'chat_reply', content: args.message ?? '' }); hasChatReply = true }
+        const args = JSON.parse(accum.argBuf) as Record<string, string>
+        if (accum.name === 'update_guide') onAction({ type: 'update_guide', content: args.content ?? '' })
+        else if (accum.name === 'chat_reply') { onAction({ type: 'chat_reply', content: args.message ?? '' }); hasChatReply = true }
       } catch { /* ignore */ }
     }
     if (!hasChatReply) onAction({ type: 'chat_reply', content: '已记录。' })
@@ -766,7 +881,7 @@ export async function generateStateCard(
         }),
       })
     } else {
-      const base = cfg.apiUrl.replace(/\/$/, '')
+      const base = resolveOpenAIBase(cfg.apiUrl)
       res = await fetch(`${base}/v1/chat/completions`, {
         method: 'POST',
         headers: openaiHeaders(cfg.apiKey),
@@ -908,4 +1023,175 @@ export async function streamGeneration(
     }
     onComplete(full)
   }
+}
+
+// ── API self-check ────────────────────────────────────────────────────────
+
+export async function checkApiConfig(cfg: ApiConfig): Promise<ApiCheckResult> {
+  const result: ApiCheckResult = {
+    ok: false,
+    connectivity: { ok: false, message: '未检测' },
+    chat: { ok: false, message: '未检测' },
+    toolUse: { ok: false, message: '未检测' },
+    streaming: { ok: false, message: '未检测' },
+  }
+
+  const testMsg = [{ role: 'user' as const, content: '请回复"OK"' }]
+
+  if (cfg.apiFormat === 'anthropic') {
+    const base = resolveAnthropicBase(cfg.apiUrl)
+
+    // 1. Connectivity — simple non-streaming chat
+    let res: Response
+    try {
+      res = await fetch(`${base}/v1/messages`, {
+        method: 'POST',
+        headers: anthropicHeaders(cfg.apiKey),
+        body: JSON.stringify({ model: cfg.apiModel, max_tokens: 32, messages: testMsg }),
+      })
+    } catch (e) {
+      result.connectivity = { ok: false, message: `无法连接: ${(e as Error).message}` }
+      return result
+    }
+
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}))
+      const msg = (errBody as { error?: { message?: string } }).error?.message || `HTTP ${res.status}`
+      result.connectivity = { ok: false, message: msg }
+      if (res.status === 401) result.connectivity.message = `认证失败: ${msg}`
+      return result
+    }
+    result.connectivity = { ok: true, message: '连接正常' }
+
+    const data = await res.json().catch(() => ({}))
+    const text = (data as { content?: { text: string }[] })?.content?.[0]?.text
+    result.chat = text ? { ok: true, message: '基础对话正常' } : { ok: false, message: '响应格式异常' }
+
+    // 2. Tool use
+    try {
+      const toolRes = await fetch(`${base}/v1/messages`, {
+        method: 'POST',
+        headers: anthropicHeaders(cfg.apiKey),
+        body: JSON.stringify({
+          model: cfg.apiModel, max_tokens: 64,
+          messages: [{ role: 'user', content: '请调用test工具，参数msg填"ok"' }],
+          tools: [{ name: 'test', description: '测试工具', input_schema: { type: 'object', properties: { msg: { type: 'string' } }, required: ['msg'] } }],
+        }),
+      })
+      if (toolRes.ok) {
+        const td = await toolRes.json() as { content?: { type: string }[] }
+        const hasToolUse = td.content?.some((b) => b.type === 'tool_use')
+        result.toolUse = hasToolUse
+          ? { ok: true, message: 'Function Call 支持正常' }
+          : { ok: true, message: '请求成功但模型未调用工具（可能影响写作功能）' }
+      } else {
+        result.toolUse = { ok: false, message: `HTTP ${toolRes.status}` }
+      }
+    } catch (e) {
+      result.toolUse = { ok: false, message: (e as Error).message }
+    }
+
+    // 3. Streaming
+    try {
+      const streamRes = await fetch(`${base}/v1/messages`, {
+        method: 'POST',
+        headers: anthropicHeaders(cfg.apiKey),
+        body: JSON.stringify({ model: cfg.apiModel, max_tokens: 16, stream: true, messages: testMsg }),
+      })
+      if (streamRes.ok) {
+        const reader = streamRes.body!.getReader()
+        const chunk = await reader.read()
+        reader.cancel()
+        const text = new TextDecoder().decode(chunk.value ?? new Uint8Array())
+        result.streaming = text.includes('event:')
+          ? { ok: true, message: '流式输出正常' }
+          : { ok: false, message: '响应非SSE流格式' }
+      } else {
+        result.streaming = { ok: false, message: `HTTP ${streamRes.status}` }
+      }
+    } catch (e) {
+      result.streaming = { ok: false, message: (e as Error).message }
+    }
+  } else {
+    // OpenAI-compatible
+    const base = resolveOpenAIBase(cfg.apiUrl)
+
+    // 1. Connectivity — basic chat
+    let res: Response
+    try {
+      res = await fetch(`${base}/v1/chat/completions`, {
+        method: 'POST',
+        headers: openaiHeaders(cfg.apiKey),
+        body: JSON.stringify({ model: cfg.apiModel, max_tokens: 32, messages: [{ role: 'system', content: 'reply OK' }, ...testMsg] }),
+      })
+    } catch (e) {
+      result.connectivity = { ok: false, message: `无法连接: ${(e as Error).message}` }
+      return result
+    }
+
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}))
+      const msg = (errBody as { error?: { message?: string } }).error?.message || `HTTP ${res.status}`
+      result.connectivity = { ok: false, message: res.status === 401 ? `认证失败: ${msg}` : msg }
+      return result
+    }
+    result.connectivity = { ok: true, message: '连接正常' }
+
+    const data = await res.json().catch(() => ({}))
+    const content = (data as { choices?: { message: { content?: string } }[] })?.choices?.[0]?.message?.content
+    result.chat = content ? { ok: true, message: '基础对话正常' } : { ok: false, message: '响应格式异常' }
+
+    // 2. Tool use
+    try {
+      const toolRes = await fetch(`${base}/v1/chat/completions`, {
+        method: 'POST',
+        headers: openaiHeaders(cfg.apiKey),
+        body: JSON.stringify({
+          model: cfg.apiModel, max_tokens: 64,
+          messages: [{ role: 'user', content: '请调用test工具，参数msg填"ok"' }],
+          tools: [{
+            type: 'function',
+            function: { name: 'test', description: '测试工具', parameters: { type: 'object', properties: { msg: { type: 'string' } }, required: ['msg'] } },
+          }],
+          tool_choice: 'auto',
+        }),
+      })
+      if (toolRes.ok) {
+        const td = await toolRes.json() as { choices?: { message: { tool_calls?: unknown[] } }[] }
+        const hasTool = (td.choices?.[0]?.message?.tool_calls?.length ?? 0) > 0
+        result.toolUse = hasTool
+          ? { ok: true, message: 'Function Call 支持正常' }
+          : { ok: true, message: '请求成功但模型未调用工具（将自动回退为纯文本模式）' }
+      } else {
+        result.toolUse = { ok: false, message: `不支持 Function Call (HTTP ${toolRes.status})，将自动回退为纯文本模式` }
+      }
+    } catch (e) {
+      result.toolUse = { ok: false, message: (e as Error).message }
+    }
+
+    // 3. Streaming
+    try {
+      const streamRes = await fetch(`${base}/v1/chat/completions`, {
+        method: 'POST',
+        headers: openaiHeaders(cfg.apiKey),
+        body: JSON.stringify({ model: cfg.apiModel, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'say hi' }] }),
+      })
+      if (streamRes.ok) {
+        const reader = streamRes.body!.getReader()
+        const chunk = await reader.read()
+        reader.cancel()
+        const text = new TextDecoder().decode(chunk.value ?? new Uint8Array())
+        result.streaming = text.includes('data:')
+          ? { ok: true, message: '流式输出正常' }
+          : { ok: false, message: '响应非SSE流格式，将使用非流式模式' }
+      } else {
+        result.streaming = { ok: false, message: `不支持流式 (HTTP ${streamRes.status})，将使用非流式模式` }
+      }
+    } catch (e) {
+      result.streaming = { ok: false, message: (e as Error).message }
+    }
+  }
+
+  result.ok = result.connectivity.ok && result.chat.ok
+  return result
 }
