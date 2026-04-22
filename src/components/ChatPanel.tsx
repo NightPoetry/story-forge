@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { buildFixedSystemPrompt, buildDynamicContext, runIntelligentGeneration, genId } from '../api'
+import { dlog } from '../debugLog'
 import { ChatMessage } from '../types'
 import StateCard from './StateCard'
 import ForeshadowingPanel from './ForeshadowingPanel'
@@ -12,8 +13,18 @@ interface Props {
 
 type Tab = 'chat' | 'state' | 'foreshadowing'
 
+// Resize textarea without disturbing the scroll position of its parent container
+function resizeTextarea(el: HTMLTextAreaElement) {
+  const scroller = el.parentElement
+  const scrollTop = scroller?.scrollTop ?? 0
+  el.style.height = 'auto'
+  el.style.height = `${el.scrollHeight}px`
+  if (scroller) scroller.scrollTop = scrollTop
+}
+
 const TOOL_LABELS: Record<string, string> = {
-  write_story: '正在撰写故事…',
+  __reasoning__: '思考中…',
+  write_story: '编写中…',
   update_state_card: '正在更新状态卡片…',
   chat_reply: '正在生成回复…',
   collect_foreshadowing: '正在回收伏笔…',
@@ -41,7 +52,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
   const {
     nodes, addChatMessage, updateStoryContent, updateStateCard,
     getAncestorChain, globalSettings, projectWritingGuide,
-    apiKey, apiUrl, apiFormat, apiModel,
+    apiKey, apiUrl, apiFormat, apiModel, toolStreamMode,
     isGenerating, setIsGenerating,
     collectForeshadowing, pushUndoSnapshot,
     soundEnabled, setSoundEnabled,
@@ -55,6 +66,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
   const abortControllerRef = useRef<AbortController | null>(null)
   const streamRafRef = useRef<number>(0)
   const pendingStreamRef = useRef<{ story?: string; stateCard?: string }>({})
+  const typewriterRef = useRef<{ timer: ReturnType<typeof setTimeout>; full: string; pos: number } | null>(null)
   const cfg = { apiKey, apiUrl, apiFormat, apiModel }
 
   useEffect(() => {
@@ -112,6 +124,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
       hasActiveForeshadowings,
       (action) => {
         if (controller.signal.aborted) return
+        dlog.info('chatpanel', `onAction: ${action.type} len=${'content' in action ? action.content.length : 0}`)
         if (action.type === 'write_story') {
           updateStoryContent(nodeId, action.content)
         } else if (action.type === 'update_state_card') {
@@ -136,6 +149,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
       },
       (err) => {
         // Cancel any pending stream updates before rolling back
+        if (typewriterRef.current) { clearTimeout(typewriterRef.current.timer); typewriterRef.current = null }
         if (streamRafRef.current) {
           cancelAnimationFrame(streamRafRef.current)
           streamRafRef.current = 0
@@ -152,35 +166,81 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
       },
       controller.signal,
       // Real-time streaming: direct DOM write for instant feedback + throttled store update
+      // When a large block arrives at once (e.g. glm-5 sends full tool args in one shot),
+      // use a typewriter effect so the user sees incremental text instead of a flash.
       (toolName, text) => {
         if (controller.signal.aborted) return
+        dlog.stream('chatpanel', `onStreamDelta [${toolName}] len=${text.length}`)
         if (toolName === 'write_story') {
-          pendingStreamRef.current.story = text
-          // Direct DOM update bypasses React for immediate visual feedback
           const el = document.getElementById('story-textarea') as HTMLTextAreaElement | null
-          if (el) {
-            el.value = text
-            el.style.height = 'auto'
-            el.style.height = `${el.scrollHeight}px`
+          const prevLen = el?.value?.length ?? 0
+          const newChars = text.length - prevLen
+
+          // If >20 new chars arrived at once, typewriter them in
+          if (newChars > 20 && el) {
+            // Cancel any existing typewriter
+            if (typewriterRef.current) clearTimeout(typewriterRef.current.timer)
+            const tw = { full: text, pos: prevLen, timer: 0 as unknown as ReturnType<typeof setTimeout> }
+            typewriterRef.current = tw
+            const CHARS_PER_TICK = 3
+            const TICK_MS = 16
+            const tick = () => {
+              if (controller.signal.aborted) { typewriterRef.current = null; return }
+              tw.pos = Math.min(tw.pos + CHARS_PER_TICK, tw.full.length)
+              const partial = tw.full.slice(0, tw.pos)
+              el.value = partial
+              resizeTextarea(el)
+              pendingStreamRef.current.story = partial
+              if (!streamRafRef.current) {
+                streamRafRef.current = requestAnimationFrame(() => {
+                  streamRafRef.current = 0
+                  const p = pendingStreamRef.current
+                  if (p.story !== undefined) { updateStoryContent(nodeId, p.story); p.story = undefined }
+                  if (p.stateCard !== undefined) { updateStateCard(nodeId, { content: p.stateCard, lastUpdated: Date.now() }); p.stateCard = undefined }
+                })
+              }
+              if (tw.pos < tw.full.length) {
+                tw.timer = setTimeout(tick, TICK_MS)
+              } else {
+                typewriterRef.current = null
+                updateStoryContent(nodeId, tw.full)
+              }
+            }
+            tw.timer = setTimeout(tick, TICK_MS)
+          } else {
+            // Normal incremental streaming — write directly
+            if (typewriterRef.current) {
+              // Update the typewriter target if it's still running
+              typewriterRef.current.full = text
+            } else {
+              pendingStreamRef.current.story = text
+              if (el) {
+                el.value = text
+                resizeTextarea(el)
+              }
+              if (!streamRafRef.current) {
+                streamRafRef.current = requestAnimationFrame(() => {
+                  streamRafRef.current = 0
+                  const p = pendingStreamRef.current
+                  if (p.story !== undefined) { updateStoryContent(nodeId, p.story); p.story = undefined }
+                  if (p.stateCard !== undefined) { updateStateCard(nodeId, { content: p.stateCard, lastUpdated: Date.now() }); p.stateCard = undefined }
+                })
+              }
+            }
           }
         } else if (toolName === 'update_state_card') {
           pendingStreamRef.current.stateCard = text
-        }
-        if (!streamRafRef.current) {
-          streamRafRef.current = requestAnimationFrame(() => {
-            streamRafRef.current = 0
-            const pending = pendingStreamRef.current
-            if (pending.story !== undefined) {
-              updateStoryContent(nodeId, pending.story)
-              pending.story = undefined
-            }
-            if (pending.stateCard !== undefined) {
-              updateStateCard(nodeId, { content: pending.stateCard, lastUpdated: Date.now() })
-              pending.stateCard = undefined
-            }
-          })
+          if (!streamRafRef.current) {
+            streamRafRef.current = requestAnimationFrame(() => {
+              streamRafRef.current = 0
+              const p = pendingStreamRef.current
+              if (p.story !== undefined) { updateStoryContent(nodeId, p.story); p.story = undefined }
+              if (p.stateCard !== undefined) { updateStateCard(nodeId, { content: p.stateCard, lastUpdated: Date.now() }); p.stateCard = undefined }
+            })
+          }
         }
       },
+      toolStreamMode,
     )
   }
 
@@ -192,6 +252,15 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
   }
 
   const flushPendingStream = () => {
+    // Finish typewriter immediately if still running
+    if (typewriterRef.current) {
+      clearTimeout(typewriterRef.current.timer)
+      const full = typewriterRef.current.full
+      typewriterRef.current = null
+      updateStoryContent(nodeId, full)
+      const el = document.getElementById('story-textarea') as HTMLTextAreaElement | null
+      if (el) el.value = full
+    }
     if (streamRafRef.current) {
       cancelAnimationFrame(streamRafRef.current)
       streamRafRef.current = 0

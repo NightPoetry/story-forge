@@ -182,6 +182,8 @@ const TOOL_GUIDANCE = `你是专业故事创作助手。根据用户指令，调
 
 // Extracts the partial (or complete) string value for `key` from a partially-received
 // JSON buffer. Returns null if the key/opening-quote hasn't arrived yet.
+import { dlog } from './debugLog'
+
 function extractPartialStringValue(json: string, key: string): string | null {
   const re = new RegExp(`"${key}"\\s*:\\s*"`)
   const match = re.exec(json)
@@ -271,16 +273,24 @@ async function doStreamFetch(
   signal?: AbortSignal,
 ): Promise<Response> {
   if (isTauri()) {
+    dlog.info('fetch', `using tauri-http for: ${url}`)
     try {
-      return await tauriFetch(url, { method: 'POST', headers, signal, body })
+      const res = await tauriFetch(url, { method: 'POST', headers, signal, body })
+      dlog.info('fetch', `tauri-http response: ${res.status}, body readable: ${!!res.body}`)
+      return res
     } catch (e) {
-      // Scope error or plugin issue → fall back to native fetch
       if ((e as Error).name === 'AbortError') throw e
-      console.warn('[tauri-http] falling back to native fetch:', (e as Error).message)
+      const errMsg = e instanceof Error ? `${e.name}: ${e.message}` : typeof e === 'string' ? e : JSON.stringify(e)
+      dlog.warn('fetch', `tauri-http failed, falling back: ${errMsg}`, { type: typeof e, constructor: (e as object)?.constructor?.name, stringified: String(e).slice(0, 200) })
+      console.warn('[tauri-http] falling back to native fetch:', errMsg)
     }
+  } else {
+    dlog.info('fetch', `using native fetch (non-Tauri): ${url}`)
   }
   return await fetch(url, { method: 'POST', headers, signal, body })
 }
+
+const yieldToPaint = () => new Promise<void>(r => setTimeout(r, 0))
 
 async function postSSE(
   url: string,
@@ -305,19 +315,46 @@ async function postSSE(
   const reader = res.body!.getReader()
   const decoder = new TextDecoder()
   let buf = ''
+  let chunkCount = 0
+  let dataEventCount = 0
+  dlog.info('postSSE', `streaming started from ${url}`)
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
     if (signal?.aborted) { reader.cancel(); break }
-    buf += decoder.decode(value, { stream: true })
+    chunkCount++
+    const chunk = decoder.decode(value, { stream: true })
+    dlog.stream('postSSE', `chunk #${chunkCount} (${chunk.length} bytes)`, chunk.slice(0, 200))
+    buf += chunk
     const lines = buf.split('\n')
     buf = lines.pop() ?? ''
+
+    // Collect data events from this chunk
+    const events: string[] = []
     for (const line of lines) {
       if (!line.startsWith('data: ')) continue
       const raw = line.slice(6).trim()
-      if (raw && raw !== '[DONE]') onData(raw)
+      if (raw && raw !== '[DONE]') events.push(raw)
+    }
+
+    // If many events arrived in one chunk (WKWebView buffering), yield between
+    // processing them so the browser can repaint and show incremental progress
+    if (events.length > 3) {
+      dlog.info('postSSE', `buffered chunk detected: ${events.length} events in 1 chunk, yielding between events`)
+      for (const raw of events) {
+        if (signal?.aborted) break
+        dataEventCount++
+        onData(raw)
+        await yieldToPaint()
+      }
+    } else {
+      for (const raw of events) {
+        dataEventCount++
+        onData(raw)
+      }
     }
   }
+  dlog.info('postSSE', `streaming done: ${chunkCount} chunks, ${dataEventCount} data events`)
   return { ok: true }
 }
 
@@ -334,8 +371,8 @@ export async function runIntelligentGeneration(
   onError: (err: string) => void,
   signal?: AbortSignal,
   onStreamDelta?: (toolName: string, text: string) => void,
+  toolStreamMode?: import('./types').ToolStreamMode,
 ) {
-  // TOOL_GUIDANCE is already embedded in the dynamic context (last part before user message)
   const fullSystem = systemPrompt
   type ToolDef = { name: string; description: string; input_schema: { type: 'object'; properties: Record<string, unknown>; required: string[] } }
   const tools = (hasActiveForeshadowings
@@ -346,9 +383,15 @@ export async function runIntelligentGeneration(
     await runAnthropicStreamingToolUse(
       cfg, fullSystem, messages, tools, onAction, onToolStart, onComplete, onError, signal, onStreamDelta,
     )
-  } else {
+  } else if (toolStreamMode === 'streaming') {
     await runOpenAIToolUse(
       cfg, fullSystem, messages, tools, onAction, onToolStart, onComplete, onError, signal, onStreamDelta,
+    )
+  } else {
+    // 'complete' or 'none': use plain text XML mode for true streaming
+    dlog.info('generation', `using plain text mode (toolStreamMode=${toolStreamMode})`)
+    await runOpenAIPlainFallback(
+      cfg, fullSystem, messages, onAction, onToolStart, onComplete, onError, signal, onStreamDelta,
     )
   }
 }
@@ -385,6 +428,7 @@ async function runAnthropicStreamingToolUse(
 
         if (evtType === 'content_block_start') {
           const block = evt.content_block as { type: string; name?: string } | undefined
+          if (block?.type === 'thinking') onToolStart('__reasoning__')
           if (block?.type === 'tool_use' && block.name) {
             blocks.set(evt.index as number, { name: block.name, buf: '' })
             onToolStart(block.name)
@@ -458,6 +502,7 @@ async function runOpenAIToolUse(
   let plainContent = ''
   type ToolAccum = { index: number; name: string; argBuf: string }
   const toolAccums = new Map<number, ToolAccum>()
+  let reasoningNotified = false
 
   let result: SSEResult
   try {
@@ -476,7 +521,16 @@ async function runOpenAIToolUse(
         if (!choice) return
         const delta = choice.delta
 
-        if (typeof delta.content === 'string' && delta.content) plainContent += delta.content
+        // Detect reasoning/thinking content (DeepSeek, GLM, etc.)
+        if (typeof delta.reasoning_content === 'string' && delta.reasoning_content && !reasoningNotified) {
+          reasoningNotified = true
+          onToolStart('__reasoning__')
+        }
+
+        if (typeof delta.content === 'string' && delta.content) {
+          plainContent += delta.content
+          dlog.stream('openai-tool', 'plain content delta', delta.content.slice(0, 80))
+        }
 
         const tcDeltas = delta.tool_calls as { index: number; function?: { name?: string; arguments?: string } }[] | undefined
         if (tcDeltas) {
@@ -486,15 +540,17 @@ async function runOpenAIToolUse(
               const name = tcd.function?.name ?? ''
               accum = { index: tcd.index, name, argBuf: '' }
               toolAccums.set(tcd.index, accum)
-              if (name) onToolStart(name)
+              if (name) { onToolStart(name); dlog.info('openai-tool', `tool started: ${name}`) }
             }
             if (tcd.function?.name && !accum.name) { accum.name = tcd.function.name; onToolStart(accum.name) }
             if (tcd.function?.arguments) {
               accum.argBuf += tcd.function.arguments
+              dlog.stream('openai-tool', `arg delta [${accum.name}] bufLen=${accum.argBuf.length}`, tcd.function.arguments.slice(0, 100))
               if (onStreamDelta) {
                 const streamKey = accum.name === 'write_story' ? 'content' : accum.name === 'update_state_card' ? 'content' : null
                 if (streamKey) {
                   const text = extractPartialStringValue(accum.argBuf, streamKey)
+                  dlog.stream('openai-tool', `extract [${accum.name}] result=${text !== null ? text.length + ' chars' : 'null'}`)
                   if (text !== null) onStreamDelta(accum.name, text)
                 }
               }
@@ -1141,32 +1197,54 @@ export async function checkApiConfig(cfg: ApiConfig): Promise<ApiCheckResult> {
     const content = (data as { choices?: { message: { content?: string } }[] })?.choices?.[0]?.message?.content
     result.chat = content ? { ok: true, message: '基础对话正常' } : { ok: false, message: '响应格式异常' }
 
-    // 2. Tool use
+    // 2. Tool use — streaming test to detect if arguments arrive incrementally
     try {
-      const toolRes = await fetch(`${base}/chat/completions`, {
-        method: 'POST',
-        headers: openaiHeaders(cfg.apiKey),
-        body: JSON.stringify({
-          model: cfg.apiModel, max_tokens: 64,
+      let argDeltaCount = 0
+      let hasTool = false
+      const toolSSE = await postSSE(
+        `${base}/chat/completions`,
+        openaiHeaders(cfg.apiKey),
+        {
+          model: cfg.apiModel, max_tokens: 64, stream: true,
           messages: [{ role: 'user', content: '请调用test工具，参数msg填"ok"' }],
           tools: [{
             type: 'function',
             function: { name: 'test', description: '测试工具', parameters: { type: 'object', properties: { msg: { type: 'string' } }, required: ['msg'] } },
           }],
           tool_choice: 'auto',
-        }),
-      })
-      if (toolRes.ok) {
-        const td = await toolRes.json() as { choices?: { message: { tool_calls?: unknown[] } }[] }
-        const hasTool = (td.choices?.[0]?.message?.tool_calls?.length ?? 0) > 0
-        result.toolUse = hasTool
-          ? { ok: true, message: 'Function Call 支持正常' }
-          : { ok: true, message: '请求成功但模型未调用工具（将自动回退为纯文本模式）' }
+        },
+        (raw) => {
+          try {
+            const evt = JSON.parse(raw) as { choices?: { delta: { tool_calls?: { function?: { arguments?: string } }[] } }[] }
+            const tcs = evt.choices?.[0]?.delta?.tool_calls
+            if (tcs) {
+              hasTool = true
+              for (const tc of tcs) {
+                if (tc.function?.arguments) argDeltaCount++
+              }
+            }
+          } catch { /* ignore */ }
+        },
+      )
+      if (toolSSE.ok && hasTool) {
+        // argDeltaCount > 2 means arguments streamed incrementally
+        if (argDeltaCount > 2) {
+          result.toolUse = { ok: true, message: 'Function Call 支持正常（参数增量流式）' }
+          result.toolStreamMode = 'streaming'
+        } else {
+          result.toolUse = { ok: true, message: 'Function Call 支持正常（参数非增量，将使用纯文本流式模式）' }
+          result.toolStreamMode = 'complete'
+        }
+      } else if (toolSSE.ok) {
+        result.toolUse = { ok: true, message: '请求成功但模型未调用工具（将使用纯文本流式模式）' }
+        result.toolStreamMode = 'none'
       } else {
-        result.toolUse = { ok: false, message: `不支持 Function Call (HTTP ${toolRes.status})，将自动回退为纯文本模式` }
+        result.toolUse = { ok: false, message: `不支持 Function Call (HTTP ${(toolSSE as { status: number }).status})，将使用纯文本流式模式` }
+        result.toolStreamMode = 'none'
       }
     } catch (e) {
       result.toolUse = { ok: false, message: (e as Error).message }
+      result.toolStreamMode = 'none'
     }
 
     // 3. Streaming

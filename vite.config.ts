@@ -1,8 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import debugPlugin from './vite-debug-plugin'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), debugPlugin()],
   server: {
     port: 1420,
     strictPort: true,

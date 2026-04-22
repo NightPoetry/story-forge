@@ -78,12 +78,15 @@ export interface FullProjectData {
 
 // ── API Check ─────────────────────────────────────────────────────────────
 
+export type ToolStreamMode = 'streaming' | 'complete' | 'none'
+
 export interface ApiCheckResult {
   ok: boolean
   connectivity: { ok: boolean; message: string }
   chat: { ok: boolean; message: string }
   toolUse: { ok: boolean; message: string }
   streaming: { ok: boolean; message: string }
+  toolStreamMode?: ToolStreamMode
 }
 
 export interface SingleBackupFile {
