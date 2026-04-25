@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
-import { ForeshadowingItem, ForwardForeshadowingReport } from '../types'
+import { ForeshadowingChatMessage, ForeshadowingItem, ForwardForeshadowingReport } from '../types'
 import { genId } from '../api'
 import { dlog } from '../debugLog'
 
@@ -248,11 +248,17 @@ function ForeshadowingEditModal({
   const [plantNote, setPlantNote] = useState(item.plantNote)
   const [revealNote, setRevealNote] = useState(item.revealNote ?? '')
 
-  const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'assistant'; content: string }[]>([])
+  type ChatMsg = ForeshadowingChatMessage
+  const [chatHistory, setChatHistory] = useState<ChatMsg[]>(item.chatHistory ?? [])
   const [chatInput, setChatInput] = useState('')
   const [generating, setGenerating] = useState(false)
   const chatEndRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+
+  // Persist chat history whenever it changes
+  useEffect(() => {
+    onUpdate(item.id, { chatHistory })
+  }, [chatHistory])
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !generating) onClose() }
@@ -325,63 +331,108 @@ function ForeshadowingEditModal({
 ${isCollected ? `- 揭示方式：${revealNote}` : ''}
 
 作者可能要你：修改真相内容、调整暗示方式、评估可行性、提出改进建议等。
-回复要简洁具体，如果建议修改，直接给出修改后的文本。
+
+你必须调用 edit_foreshadowing 工具回复。
+- message 字段：简短说明修改理由（1-3句）
+- 如果作者要求修改或改进，必须在 secret / plant_note / reveal_note 字段给出完整的修改后文本（不是差异，是完整替换文本）
+- 只有纯评估/分析且作者没要求改动时，才可以省略修改字段
+- 倾向于主动给出修改建议而非反问
 ${globalSettings.trim() ? `\n写作规则：${globalSettings.trim()}` : ''}`
 
-      const messages = [
+      const toolDef = {
+        name: 'edit_foreshadowing',
+        description: '回复作者并可选地提供修改建议',
+        parameters: {
+          type: 'object',
+          properties: {
+            message: { type: 'string', description: '对作者的回复：分析、说明、建议理由' },
+            secret: { type: 'string', description: '修改后的隐藏真相（完整文本）。仅在建议修改时提供' },
+            plant_note: { type: 'string', description: '修改后的暗示与误导（完整文本）。仅在建议修改时提供' },
+            ...(isCollected ? { reveal_note: { type: 'string', description: '修改后的揭示方式（完整文本）。仅在建议修改时提供' } } : {}),
+          },
+          required: ['message'],
+        },
+      }
+
+      const chatMessages = [
         { role: 'user' as const, content: `以下是完整的故事上下文：\n\n${context}` },
-        ...newHistory,
+        ...newHistory.map(m => ({ role: m.role, content: m.content })),
       ]
 
       const base = apiUrl.replace(/\/+$/, '')
       let reply = ''
+      let suggestion: ChatMsg['suggestion'] = undefined
+
+      const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+      const fetchFn = isTauri ? (await import('@tauri-apps/plugin-http')).fetch : fetch
 
       if (apiFormat === 'anthropic') {
-        const { fetch: tauriFetch } = await import('@tauri-apps/plugin-http')
-        const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
         const resolvedBase = (() => {
-          const b = base
-          const isOfficial = b === 'https://api.anthropic.com' || b === 'http://api.anthropic.com'
+          const isOfficial = base === 'https://api.anthropic.com' || base === 'http://api.anthropic.com'
           if (isOfficial && !isTauri) return '/api/anthropic'
-          return b
+          return base
         })()
-        const fetchFn = isTauri ? tauriFetch : fetch
         const res = await fetchFn(`${resolvedBase}/v1/messages`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-          body: JSON.stringify({ model: apiModel, max_tokens: 1024, system: systemPrompt, messages }),
+          body: JSON.stringify({
+            model: apiModel, max_tokens: 1024, system: systemPrompt, messages: chatMessages,
+            tools: [{ name: toolDef.name, description: toolDef.description, input_schema: toolDef.parameters }],
+          }),
           signal: controller.signal,
         })
         if (res.ok) {
-          const data = await res.json() as { content?: { text: string }[] }
-          reply = data.content?.[0]?.text ?? ''
+          const data = await res.json() as { content?: { type: string; text?: string; input?: Record<string, string> }[] }
+          for (const block of data.content ?? []) {
+            if (block.type === 'text' && block.text) reply = block.text
+            if (block.type === 'tool_use' && block.input) {
+              reply = block.input.message ?? reply
+              suggestion = parseSuggestion(block.input)
+            }
+          }
         }
       } else {
-        const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
         let resolvedBase = base
         if (!isTauri) {
           try {
             const u = new URL(base)
-            const hostname = u.hostname
-            const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.startsWith('10.')
-            if (isLocal) resolvedBase = `/api/local/${u.hostname}/${u.port}${u.pathname}`
-          } catch { /* keep original */ }
+            const h = u.hostname
+            if (h === 'localhost' || h === '127.0.0.1' || h.startsWith('192.168.') || h.startsWith('10.'))
+              resolvedBase = `/api/local/${u.hostname}/${u.port}${u.pathname}`
+          } catch { /* keep */ }
         }
-        const fetchFn = isTauri ? (await import('@tauri-apps/plugin-http')).fetch : fetch
         const res = await fetchFn(`${resolvedBase}/chat/completions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify({ model: apiModel, max_tokens: 1024, messages: [{ role: 'system', content: systemPrompt }, ...messages] }),
+          body: JSON.stringify({
+            model: apiModel, max_tokens: 1024,
+            messages: [{ role: 'system', content: systemPrompt }, ...chatMessages],
+            tools: [{ type: 'function', function: toolDef }],
+            tool_choice: 'required',
+          }),
           signal: controller.signal,
         })
         if (res.ok) {
-          const data = await res.json() as { choices?: { message: { content?: string } }[] }
-          reply = data.choices?.[0]?.message?.content ?? ''
+          const data = await res.json() as { choices?: { message: { content?: string; tool_calls?: { function: { arguments: string } }[] } }[] }
+          const msg = data.choices?.[0]?.message
+          reply = msg?.content ?? ''
+          const tc = msg?.tool_calls?.[0]
+          if (tc) {
+            try {
+              const args = JSON.parse(tc.function.arguments) as Record<string, string>
+              reply = args.message ?? reply
+              suggestion = parseSuggestion(args)
+            } catch { /* ignore */ }
+          }
         }
       }
 
-      if (reply && !controller.signal.aborted) {
-        setChatHistory(prev => [...prev, { role: 'assistant', content: reply }])
+      if (!controller.signal.aborted) {
+        const hasChanges = suggestion && (suggestion.secret || suggestion.plantNote || suggestion.revealNote)
+        setChatHistory(prev => [...prev, {
+          role: 'assistant', content: reply || '已分析。',
+          ...(hasChanges ? { suggestion } : {}),
+        }])
       }
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
@@ -390,6 +441,24 @@ ${globalSettings.trim() ? `\n写作规则：${globalSettings.trim()}` : ''}`
       }
     }
     setGenerating(false)
+  }
+
+  const parseSuggestion = (args: Record<string, string>): ChatMsg['suggestion'] => {
+    const s: ChatMsg['suggestion'] = {}
+    if (args.secret && args.secret !== secret) s.secret = args.secret
+    if (args.plant_note && args.plant_note !== plantNote) s.plantNote = args.plant_note
+    if (args.reveal_note && args.reveal_note !== revealNote) s.revealNote = args.reveal_note
+    return s
+  }
+
+  const applySuggestion = (idx: number) => {
+    const msg = chatHistory[idx]
+    if (!msg?.suggestion) return
+    const s = msg.suggestion
+    if (s.secret) { setSecret(s.secret); onUpdate(item.id, { secret: s.secret }) }
+    if (s.plantNote) { setPlantNote(s.plantNote); onUpdate(item.id, { plantNote: s.plantNote }) }
+    if (s.revealNote) { setRevealNote(s.revealNote); onUpdate(item.id, { revealNote: s.revealNote }) }
+    setChatHistory(prev => prev.map((m, i) => i === idx ? { ...m, applied: true } : m))
   }
 
   return (
@@ -523,6 +592,48 @@ ${globalSettings.trim() ? `\n写作规则：${globalSettings.trim()}` : ''}`
                     }}>
                     {msg.content}
                   </div>
+                  {/* Suggestion preview + apply button */}
+                  {msg.suggestion && (msg.suggestion.secret || msg.suggestion.plantNote || msg.suggestion.revealNote) && (
+                    <div className="mt-1.5 rounded px-2.5 py-2"
+                      style={{ background: 'rgba(180,140,90,0.08)', border: '1px solid rgba(180,140,90,0.2)' }}>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-xs" style={{ color: '#b8916a', fontSize: '10px', fontWeight: 500 }}>
+                          {msg.applied ? '已应用' : '建议修改'}
+                        </span>
+                        {!msg.applied && (
+                          <button onClick={() => applySuggestion(i)}
+                            className="text-xs px-2.5 py-0.5 rounded transition-all hover:brightness-110"
+                            style={{ background: 'rgba(180,140,90,0.25)', color: '#b8916a', border: '1px solid rgba(180,140,90,0.4)', fontSize: '10px', fontWeight: 500 }}>
+                            应用修改
+                          </button>
+                        )}
+                      </div>
+                      {msg.suggestion.secret && (
+                        <div className="mb-1">
+                          <span className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '9px' }}>真相</span>
+                          <p className="text-xs mt-0.5" style={{ color: 'var(--text-primary)', fontSize: '11px', lineHeight: 1.5, opacity: msg.applied ? 0.5 : 1 }}>
+                            {msg.suggestion.secret}
+                          </p>
+                        </div>
+                      )}
+                      {msg.suggestion.plantNote && (
+                        <div className="mb-1">
+                          <span className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '9px' }}>暗示与误导</span>
+                          <p className="text-xs mt-0.5" style={{ color: 'var(--text-primary)', fontSize: '11px', lineHeight: 1.5, opacity: msg.applied ? 0.5 : 1 }}>
+                            {msg.suggestion.plantNote}
+                          </p>
+                        </div>
+                      )}
+                      {msg.suggestion.revealNote && (
+                        <div>
+                          <span className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '9px' }}>揭示方式</span>
+                          <p className="text-xs mt-0.5" style={{ color: 'var(--text-primary)', fontSize: '11px', lineHeight: 1.5, opacity: msg.applied ? 0.5 : 1 }}>
+                            {msg.suggestion.revealNote}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
               {generating && (
