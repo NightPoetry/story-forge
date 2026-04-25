@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
-import { buildFixedSystemPrompt, buildDynamicContext, runIntelligentGeneration, genId } from '../api'
+import { buildFixedSystemPrompt, buildDynamicContext, runIntelligentGeneration, runAutoInit, genId } from '../api'
 import { dlog } from '../debugLog'
 import { ChatMessage } from '../types'
 import StateCard from './StateCard'
@@ -28,7 +28,7 @@ const TOOL_LABELS: Record<string, string> = {
   update_state_card: '正在更新状态卡片…',
   update_writing_rules: '正在更新写作规则…',
   chat_reply: '正在生成回复…',
-  add_foreshadowing: '正在创建伏笔…',
+  add_foreshadowings: '正在创建伏笔…',
   collect_foreshadowing: '正在回收伏笔…',
   report_forward_foreshadowing: '分析正伏笔…',
 }
@@ -139,8 +139,8 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
           addChatMessage(nodeId, {
             id: genId(), role: 'assistant', content: action.content, timestamp: Date.now(),
           })
-        } else if (action.type === 'add_foreshadowing') {
-          addForeshadowing(nodeId, action.secret, action.plantNote)
+        } else if (action.type === 'add_foreshadowings') {
+          for (const item of action.items) addForeshadowing(nodeId, item.secret, item.plantNote)
         } else if (action.type === 'collect_foreshadowing') {
           collectForeshadowing(nodeId, action.id, action.revealNote)
         } else if (action.type === 'report_forward_foreshadowing') {
@@ -150,8 +150,35 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
       (toolName) => {
         if (!controller.signal.aborted) setStage(TOOL_LABELS[toolName] ?? '处理中…')
       },
-      () => {
+      async () => {
         flushPendingStream()
+        // Auto-init empty fields after main generation
+        const s = useStore.getState()
+        const curNode = s.nodes[nodeId]
+        if (curNode && !controller.signal.aborted) {
+          const ctx = {
+            stateCardEmpty: !curNode.stateCard.content.trim(),
+            aiWritingRulesEmpty: !s.aiWritingRules.trim(),
+            foreshadowingsEmpty: curNode.foreshadowings.length === 0,
+            stateCardContent: curNode.stateCard.content,
+            storyContext: curNode.storyContent,
+          }
+          if (ctx.aiWritingRulesEmpty || ctx.foreshadowingsEmpty) {
+            setStage('正在初始化…')
+            await runAutoInit(cfg, ctx,
+              (action) => {
+                if (controller.signal.aborted) return
+                if (action.type === 'update_writing_rules') setAiWritingRules(action.content)
+                else if (action.type === 'add_foreshadowings') {
+                  for (const item of action.items) addForeshadowing(nodeId, item.secret, item.plantNote)
+                }
+              },
+              (toolName) => { if (!controller.signal.aborted) setStage(TOOL_LABELS[toolName] ?? '正在初始化…') },
+              () => {},
+              controller.signal,
+            )
+          }
+        }
         if (soundEnabled) playDoneSound()
         setStage(null)
         setIsGenerating(false)

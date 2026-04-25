@@ -199,16 +199,26 @@ const COLLECT_FORESHADOWING_TOOL = {
 } as const
 
 const ADD_FORESHADOWING_TOOL = {
-  name: 'add_foreshadowing',
+  name: 'add_foreshadowings',
   description:
-    '添加新的逆伏笔。当用户要求创建伏笔、设计隐藏真相，或当伏笔档案为空且故事已有足够设定时，主动为故事设计伏笔。每次调用添加一条，可多次调用添加多条。',
+    '批量添加逆伏笔（1-5条）。当用户要求创建伏笔、设计隐藏真相，或当伏笔档案为空且故事已有足够设定时，主动为故事设计伏笔。一次调用可添加多条。',
   input_schema: {
     type: 'object' as const,
     properties: {
-      secret: { type: 'string', description: '隐藏的真相——只有作者知道的秘密，读者和主角都被蒙在鼓里' },
-      plant_note: { type: 'string', description: '如何在故事中暗示并误导：要植入什么线索，以及如何歪曲其含义让读者往相反方向理解' },
+      items: {
+        type: 'array',
+        description: '要添加的伏笔列表',
+        items: {
+          type: 'object',
+          properties: {
+            secret: { type: 'string', description: '隐藏的真相——只有作者知道的秘密，读者和主角都被蒙在鼓里' },
+            plant_note: { type: 'string', description: '如何在故事中暗示并误导：要植入什么线索，以及如何歪曲其含义让读者往相反方向理解' },
+          },
+          required: ['secret', 'plant_note'],
+        },
+      },
     },
-    required: ['secret', 'plant_note'],
+    required: ['items'],
   },
 } as const
 
@@ -273,12 +283,12 @@ const TOOL_GUIDANCE = `你是专业故事创作助手。根据用户指令，调
   - 调用 write_story 后**必须**调用 report_forward_foreshadowing，报告用了哪些上文细节、还有哪些可用的候选细节。
 - 用户要求建立设定、世界观、人物背景，或故事出现重要变化 → 调用 update_state_card
 - 用户要求修改写作风格、叙事规则、文风约定等写作层面的规则 → 调用 update_writing_rules
-- 用户要求创建伏笔、设计隐藏真相 → 调用 add_foreshadowing（每次一条，可多次调用）
+- 用户要求创建伏笔、设计隐藏真相 → 调用 add_foreshadowings（一次可添加多条）
 - 故事情节自然发展到揭示某伏笔的合适时机 → 调用 collect_foreshadowing（仅当伏笔档案有待回收项时可用）
 - 【自动初始化】如果上方提示某些内容为空，在完成用户主要请求的同时，主动调用对应工具填充合理的初始内容：
   - 状态卡片为空 → 根据已知信息调用 update_state_card 初始化
   - AI 写作规则为空 → 根据故事类型和风格调用 update_writing_rules 生成适合的写作规则
-  - 伏笔档案为空且故事已有基础设定 → 调用 add_foreshadowing 设计 2-3 条伏笔
+  - 伏笔档案为空且故事已有基础设定 → 调用 add_foreshadowings 设计 2-3 条伏笔
 - 可同时调用多个工具
 - 每次响应必须调用 chat_reply 向用户简短说明操作（不要复述正文）`
 
@@ -330,7 +340,7 @@ export type AIAction =
   | { type: 'update_writing_rules'; content: string }
   | { type: 'chat_reply'; content: string }
   | { type: 'collect_foreshadowing'; id: string; revealNote: string }
-  | { type: 'add_foreshadowing'; secret: string; plantNote: string }
+  | { type: 'add_foreshadowings'; items: { secret: string; plantNote: string }[] }
   | { type: 'report_forward_foreshadowing'; used: { detail: string; source: string; usage: string }[]; candidates: { detail: string; source: string; potential: string }[] }
 
 export type AIGuideAction =
@@ -588,7 +598,10 @@ async function runAnthropicStreamingToolUse(
               else if (block.name === 'update_writing_rules') onAction({ type: 'update_writing_rules', content: (input.content as string) ?? '' })
               else if (block.name === 'chat_reply') { onAction({ type: 'chat_reply', content: (input.message as string) ?? '' }); hasChatReply = true }
               else if (block.name === 'collect_foreshadowing') onAction({ type: 'collect_foreshadowing', id: (input.id as string) ?? '', revealNote: (input.reveal_note as string) ?? '' })
-              else if (block.name === 'add_foreshadowing') onAction({ type: 'add_foreshadowing', secret: (input.secret as string) ?? '', plantNote: (input.plant_note as string) ?? '' })
+              else if (block.name === 'add_foreshadowings') {
+                const items = ((input.items as { secret: string; plant_note: string }[]) ?? []).map(i => ({ secret: i.secret ?? '', plantNote: i.plant_note ?? '' }))
+                if (items.length > 0) onAction({ type: 'add_foreshadowings', items })
+              }
               else if (block.name === 'report_forward_foreshadowing') {
                 onAction({
                   type: 'report_forward_foreshadowing',
@@ -646,7 +659,7 @@ async function runOpenAIToolUse(
       {
         model: cfg.apiModel, stream: true,
         messages: [{ role: 'system', content: systemPrompt }, ...messages],
-        tools: openAITools, tool_choice: 'auto',
+        tools: openAITools, tool_choice: 'required',
       },
       (raw) => {
         let evt: Record<string, unknown>
@@ -720,7 +733,10 @@ async function runOpenAIToolUse(
       else if (accum.name === 'update_writing_rules') onAction({ type: 'update_writing_rules', content: (args.content as string) ?? '' })
       else if (accum.name === 'chat_reply') { onAction({ type: 'chat_reply', content: (args.message as string) ?? '' }); hasChatReply = true }
       else if (accum.name === 'collect_foreshadowing') onAction({ type: 'collect_foreshadowing', id: (args.id as string) ?? '', revealNote: (args.reveal_note as string) ?? '' })
-      else if (accum.name === 'add_foreshadowing') onAction({ type: 'add_foreshadowing', secret: (args.secret as string) ?? '', plantNote: (args.plant_note as string) ?? '' })
+      else if (accum.name === 'add_foreshadowings') {
+        const items = ((args.items as { secret: string; plant_note: string }[]) ?? []).map(i => ({ secret: i.secret ?? '', plantNote: i.plant_note ?? '' }))
+        if (items.length > 0) onAction({ type: 'add_foreshadowings', items })
+      }
       else if (accum.name === 'report_forward_foreshadowing') {
         onAction({
           type: 'report_forward_foreshadowing',
@@ -731,7 +747,11 @@ async function runOpenAIToolUse(
     } catch { /* ignore */ }
   }
 
-  if (toolAccums.size === 0 && plainContent.trim()) onAction({ type: 'write_story', content: plainContent.trim() })
+  if (toolAccums.size === 0 && plainContent.trim()) {
+    dlog.info('openai-tool', 'no tool calls in streaming response, falling back to plain mode')
+    await runOpenAIPlainFallback(cfg, systemPrompt, messages, onAction, onToolStart, onComplete, onError, signal, onStreamDelta)
+    return
+  }
   if (!hasChatReply) onAction({ type: 'chat_reply', content: '已处理您的请求。' })
   onComplete()
 }
@@ -760,8 +780,9 @@ const PLAIN_OUTPUT_INSTRUCTIONS = `
 </update_writing_rules>
 
 添加伏笔时（用户要求创建伏笔，或伏笔为空时主动设计）：
-<add_foreshadowing secret="隐藏的真相" plant_note="暗示与误导方式" />
-可多次使用添加多条。
+<add_foreshadowings>
+[{"secret":"隐藏的真相","plant_note":"暗示与误导方式"},{"secret":"另一个真相","plant_note":"另一种误导"}]
+</add_foreshadowings>
 
 回收伏笔时（仅当伏笔档案有待回收项）：
 <collect_foreshadowing id="F1" reveal_note="如何揭示的说明" />
@@ -803,11 +824,14 @@ function parsePlainActions(text: string): AIAction[] {
   const writingRules = extractTag('update_writing_rules')
   if (writingRules) actions.push({ type: 'update_writing_rules', content: writingRules })
 
-  // <add_foreshadowing secret="..." plant_note="..." />
-  const afRe = /<add_foreshadowing\s+secret="([^"]*?)"\s+plant_note="([^"]*?)"\s*\/?>/g
-  let afm
-  while ((afm = afRe.exec(text)) !== null) {
-    actions.push({ type: 'add_foreshadowing', secret: afm[1], plantNote: afm[2] })
+  // <add_foreshadowings>[...]</add_foreshadowings>
+  const afBlock = extractTag('add_foreshadowings')
+  if (afBlock) {
+    try {
+      const raw = JSON.parse(afBlock) as { secret: string; plant_note: string }[]
+      const items = raw.map(i => ({ secret: i.secret ?? '', plantNote: i.plant_note ?? '' }))
+      if (items.length > 0) actions.push({ type: 'add_foreshadowings', items })
+    } catch { /* ignore */ }
   }
 
   // <collect_foreshadowing id="F1" reveal_note="..." /> or with closing tag
@@ -1383,4 +1407,123 @@ export async function checkApiConfig(cfg: ApiConfig): Promise<ApiCheckResult> {
 
   result.ok = result.connectivity.ok && result.chat.ok
   return result
+}
+
+// ── Auto-initialization for empty fields ─────────────────────────────────
+
+interface AutoInitContext {
+  stateCardEmpty: boolean
+  aiWritingRulesEmpty: boolean
+  foreshadowingsEmpty: boolean
+  stateCardContent: string
+  storyContext: string
+}
+
+type InitTask = {
+  label: string
+  tool: { name: string; description: string; input_schema: { type: 'object'; properties: Record<string, unknown>; required: string[] } }
+  prompt: string
+}
+
+export async function runAutoInit(
+  cfg: ApiConfig,
+  ctx: AutoInitContext,
+  onAction: (action: AIAction) => void,
+  onToolStart: (toolName: string) => void,
+  onComplete: () => void,
+  signal?: AbortSignal,
+) {
+  const storyInfo = [
+    ctx.stateCardContent ? `状态卡片：\n${ctx.stateCardContent}` : '',
+    ctx.storyContext ? `故事上文：\n${ctx.storyContext.slice(0, 500)}` : '',
+  ].filter(Boolean).join('\n\n')
+
+  const tasks: InitTask[] = []
+  if (ctx.aiWritingRulesEmpty) {
+    tasks.push({
+      label: 'AI 写作规则',
+      tool: UPDATE_WRITING_RULES_TOOL as unknown as InitTask['tool'],
+      prompt: `根据以下故事信息，生成适合这个故事的写作规则（叙事风格、文风基调、注意事项等）。直接调用 update_writing_rules 工具。\n\n${storyInfo}`,
+    })
+  }
+  if (ctx.foreshadowingsEmpty && (ctx.stateCardContent || !ctx.stateCardEmpty)) {
+    tasks.push({
+      label: '伏笔',
+      tool: ADD_FORESHADOWING_TOOL as unknown as InitTask['tool'],
+      prompt: `根据以下故事信息，设计 2-3 条逆伏笔（每条包含隐藏真相和误导方式）。直接调用 add_foreshadowings 工具。\n\n${storyInfo}`,
+    })
+  }
+  if (tasks.length === 0) { onComplete(); return }
+
+  for (const task of tasks) {
+    if (signal?.aborted) break
+    dlog.info('auto-init', `initializing: ${task.label}`)
+    const messages = [{ role: 'user' as const, content: task.prompt }]
+    const tools = [task.tool]
+
+    if (cfg.apiFormat === 'anthropic') {
+      const base = resolveAnthropicBase(cfg.apiUrl)
+      type BlockInfo = { name: string; buf: string }
+      const blocks = new Map<number, BlockInfo>()
+      try {
+        await postSSE(
+          `${base}/v1/messages`,
+          anthropicHeaders(cfg.apiKey),
+          { model: cfg.apiModel, max_tokens: 2048, stream: true, messages, tools },
+          (raw) => {
+            let evt: Record<string, unknown>
+            try { evt = JSON.parse(raw) as Record<string, unknown> } catch { return }
+            const evtType = evt.type as string
+            if (evtType === 'content_block_start') {
+              const block = evt.content_block as { type: string; name?: string } | undefined
+              if (block?.type === 'tool_use' && block.name) { blocks.set(evt.index as number, { name: block.name, buf: '' }); onToolStart(block.name) }
+            }
+            if (evtType === 'content_block_delta') {
+              const delta = evt.delta as { type: string; partial_json?: string } | undefined
+              if (delta?.type === 'input_json_delta' && delta.partial_json) { const b = blocks.get(evt.index as number); if (b) b.buf += delta.partial_json }
+            }
+            if (evtType === 'content_block_stop') {
+              const block = blocks.get(evt.index as number)
+              if (block) { try { dispatchAutoInitAction(block.name, JSON.parse(block.buf), onAction) } catch { /* ignore */ } }
+            }
+          },
+          signal,
+        )
+      } catch { /* ignore */ }
+    } else {
+      const base = resolveOpenAIBase(cfg.apiUrl)
+      const openAITools = tools.map(t => ({ type: 'function' as const, function: { name: t.name, description: t.description, parameters: t.input_schema } }))
+      try {
+        dlog.info('auto-init', `fetching: ${base}/chat/completions tool=${task.tool.name}`)
+        const res = await doFetch(`${base}/chat/completions`, {
+          method: 'POST',
+          headers: openaiHeaders(cfg.apiKey),
+          body: JSON.stringify({ model: cfg.apiModel, messages, tools: openAITools, tool_choice: 'required' }),
+          signal,
+        })
+        dlog.info('auto-init', `response: ${res.status} ok=${res.ok}`)
+        if (res.ok) {
+          const data = await res.json() as { choices?: { message: { tool_calls?: { function: { name: string; arguments: string } }[] } }[] }
+          const tcs = data.choices?.[0]?.message?.tool_calls ?? []
+          dlog.info('auto-init', `tool calls: ${tcs.length} names=${tcs.map(t => t.function.name).join(',')}`)
+          for (const tc of tcs) {
+            onToolStart(tc.function.name)
+            try { dispatchAutoInitAction(tc.function.name, JSON.parse(tc.function.arguments), onAction) } catch (e) { dlog.warn('auto-init', `dispatch error: ${(e as Error).message}`) }
+          }
+        } else {
+          const errBody = await res.text().catch(() => '')
+          dlog.warn('auto-init', `error response: ${errBody.slice(0, 200)}`)
+        }
+      } catch (e) { dlog.warn('auto-init', `fetch error: ${(e as Error).message}`) }
+    }
+  }
+  onComplete()
+}
+
+function dispatchAutoInitAction(name: string, args: Record<string, unknown>, onAction: (action: AIAction) => void) {
+  if (name === 'update_writing_rules') onAction({ type: 'update_writing_rules', content: (args.content as string) ?? '' })
+  else if (name === 'add_foreshadowings') {
+    const items = ((args.items as { secret: string; plant_note: string }[]) ?? []).map(i => ({ secret: i.secret ?? '', plantNote: i.plant_note ?? '' }))
+    if (items.length > 0) onAction({ type: 'add_foreshadowings', items })
+  }
 }
