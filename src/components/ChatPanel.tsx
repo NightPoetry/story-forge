@@ -26,7 +26,9 @@ const TOOL_LABELS: Record<string, string> = {
   __reasoning__: '思考中…',
   write_story: '编写中…',
   update_state_card: '正在更新状态卡片…',
+  update_writing_rules: '正在更新写作规则…',
   chat_reply: '正在生成回复…',
+  add_foreshadowing: '正在创建伏笔…',
   collect_foreshadowing: '正在回收伏笔…',
   report_forward_foreshadowing: '分析正伏笔…',
 }
@@ -52,12 +54,12 @@ function playDoneSound() {
 export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
   const {
     nodes, addChatMessage, updateStoryContent, updateStateCard,
-    getAncestorChain, globalSettings, projectWritingGuide,
+    getAncestorChain, globalSettings, projectWritingGuide, aiWritingRules,
     apiKey, apiUrl, apiFormat, apiModel, toolStreamMode,
     isGenerating, setIsGenerating,
-    collectForeshadowing, pushUndoSnapshot,
+    collectForeshadowing, addForeshadowing, pushUndoSnapshot,
     soundEnabled, setSoundEnabled,
-    updateForwardForeshadowing,
+    updateForwardForeshadowing, setAiWritingRules,
   } = useStore()
 
   const node = nodes[nodeId]
@@ -105,7 +107,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
 
     const ancestors = getAncestorChain(nodeId)
     const fixedSystem = buildFixedSystemPrompt(globalSettings)
-    const dynamicContext = buildDynamicContext(node, ancestors, projectWritingGuide)
+    const dynamicContext = buildDynamicContext(node, ancestors, projectWritingGuide, aiWritingRules)
     const hasActiveForeshadowings = foreshadowings.some((f) => f.status === 'planted')
 
     // Historical instructions (no AI replies — keeps context clean)
@@ -131,10 +133,14 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
           updateStoryContent(nodeId, action.content)
         } else if (action.type === 'update_state_card') {
           updateStateCard(nodeId, { content: action.content, lastUpdated: Date.now() })
+        } else if (action.type === 'update_writing_rules') {
+          setAiWritingRules(action.content)
         } else if (action.type === 'chat_reply') {
           addChatMessage(nodeId, {
             id: genId(), role: 'assistant', content: action.content, timestamp: Date.now(),
           })
+        } else if (action.type === 'add_foreshadowing') {
+          addForeshadowing(nodeId, action.secret, action.plantNote)
         } else if (action.type === 'collect_foreshadowing') {
           collectForeshadowing(nodeId, action.id, action.revealNote)
         } else if (action.type === 'report_forward_foreshadowing') {
@@ -242,6 +248,8 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
               if (p.stateCard !== undefined) { updateStateCard(nodeId, { content: p.stateCard, lastUpdated: Date.now() }); p.stateCard = undefined }
             })
           }
+        } else if (toolName === 'update_writing_rules') {
+          setAiWritingRules(text)
         }
       },
       toolStreamMode,

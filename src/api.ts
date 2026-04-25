@@ -52,6 +52,7 @@ export function buildDynamicContext(
   node: StoryNodeData,
   ancestors: StoryNodeData[],
   storySettings: string,
+  aiWritingRules?: string,
 ): string {
   const parts: string[] = []
 
@@ -96,6 +97,20 @@ export function buildDynamicContext(
   if (hasState) {
     const note = hasSettings ? '（若与上方故事设定冲突，以此为准）' : ''
     parts.push(`# 派生状态卡片${note}\n${node.stateCard.content.trim()}`)
+  }
+
+  // AI 写作规则
+  if (aiWritingRules?.trim()) {
+    parts.push(`# AI 写作规则\n${aiWritingRules.trim()}`)
+  }
+
+  // 空内容自动初始化提示
+  const emptyParts: string[] = []
+  if (!node.stateCard.content.trim()) emptyParts.push('状态卡片')
+  if (!aiWritingRules?.trim()) emptyParts.push('AI 写作规则')
+  if (foreshadowings.length === 0) emptyParts.push('伏笔档案')
+  if (emptyParts.length > 0) {
+    parts.push(`# 自动初始化提示\n以下内容当前为空：${emptyParts.join('、')}。如果用户的指令涉及故事创作或设定建立，请在完成主要任务的同时，主动调用对应工具进行初始化填充（伏笔需要故事有基础设定后才初始化）。`)
   }
 
   // 节点信息 + 字数要求
@@ -175,6 +190,36 @@ const COLLECT_FORESHADOWING_TOOL = {
   },
 } as const
 
+const ADD_FORESHADOWING_TOOL = {
+  name: 'add_foreshadowing',
+  description:
+    '添加新的逆伏笔。当用户要求创建伏笔、设计隐藏真相，或当伏笔档案为空且故事已有足够设定时，主动为故事设计伏笔。每次调用添加一条，可多次调用添加多条。',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      secret: { type: 'string', description: '隐藏的真相——只有作者知道的秘密，读者和主角都被蒙在鼓里' },
+      plant_note: { type: 'string', description: '如何在故事中暗示并误导：要植入什么线索，以及如何歪曲其含义让读者往相反方向理解' },
+    },
+    required: ['secret', 'plant_note'],
+  },
+} as const
+
+const UPDATE_WRITING_RULES_TOOL = {
+  name: 'update_writing_rules',
+  description:
+    '更新 AI 写作规则。当用户明确要求修改写作风格、叙事规则、文风约定等写作层面的规则时调用。必须在现有规则基础上增量更新：保留仍有效的规则，增补新规则，修正已过时的内容。',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      content: {
+        type: 'string',
+        description: '更新后的完整 AI 写作规则文本',
+      },
+    },
+    required: ['content'],
+  },
+} as const
+
 const REPORT_FORWARD_FORESHADOWING_TOOL = {
   name: 'report_forward_foreshadowing',
   description:
@@ -219,7 +264,13 @@ const TOOL_GUIDANCE = `你是专业故事创作助手。根据用户指令，调
   - 【逆伏笔·设计】根据伏笔档案中的隐藏真相，在故事中植入暗示但必须用剧情歪曲其含义，让读者和主角一同被误导——暗示要有，但理解方向必须是错的。
   - 调用 write_story 后**必须**调用 report_forward_foreshadowing，报告用了哪些上文细节、还有哪些可用的候选细节。
 - 用户要求建立设定、世界观、人物背景，或故事出现重要变化 → 调用 update_state_card
+- 用户要求修改写作风格、叙事规则、文风约定等写作层面的规则 → 调用 update_writing_rules
+- 用户要求创建伏笔、设计隐藏真相 → 调用 add_foreshadowing（每次一条，可多次调用）
 - 故事情节自然发展到揭示某伏笔的合适时机 → 调用 collect_foreshadowing（仅当伏笔档案有待回收项时可用）
+- 【自动初始化】如果上方提示某些内容为空，在完成用户主要请求的同时，主动调用对应工具填充合理的初始内容：
+  - 状态卡片为空 → 根据已知信息调用 update_state_card 初始化
+  - AI 写作规则为空 → 根据故事类型和风格调用 update_writing_rules 生成适合的写作规则
+  - 伏笔档案为空且故事已有基础设定 → 调用 add_foreshadowing 设计 2-3 条伏笔
 - 可同时调用多个工具
 - 每次响应必须调用 chat_reply 向用户简短说明操作（不要复述正文）`
 
@@ -268,8 +319,10 @@ function extractPartialStringValue(json: string, key: string): string | null {
 export type AIAction =
   | { type: 'write_story'; content: string }
   | { type: 'update_state_card'; content: string }
+  | { type: 'update_writing_rules'; content: string }
   | { type: 'chat_reply'; content: string }
   | { type: 'collect_foreshadowing'; id: string; revealNote: string }
+  | { type: 'add_foreshadowing'; secret: string; plantNote: string }
   | { type: 'report_forward_foreshadowing'; used: { detail: string; source: string; usage: string }[]; candidates: { detail: string; source: string; potential: string }[] }
 
 export type AIGuideAction =
@@ -421,6 +474,8 @@ export async function runIntelligentGeneration(
   type ToolDef = { name: string; description: string; input_schema: { type: 'object'; properties: Record<string, unknown>; required: string[] } }
   const tools = [
     ...STORY_TOOLS,
+    UPDATE_WRITING_RULES_TOOL,
+    ADD_FORESHADOWING_TOOL,
     REPORT_FORWARD_FORESHADOWING_TOOL,
     ...(hasActiveForeshadowings ? [COLLECT_FORESHADOWING_TOOL] : []),
   ] as unknown as ToolDef[]
@@ -490,6 +545,7 @@ async function runAnthropicStreamingToolUse(
                 const streamKey =
                   block.name === 'write_story' ? 'content'
                   : block.name === 'update_state_card' ? 'content'
+                  : block.name === 'update_writing_rules' ? 'content'
                   : null
                 if (streamKey) {
                   const text = extractPartialStringValue(block.buf, streamKey)
@@ -506,8 +562,10 @@ async function runAnthropicStreamingToolUse(
               const input = JSON.parse(block.buf) as Record<string, unknown>
               if (block.name === 'write_story') onAction({ type: 'write_story', content: (input.content as string) ?? '' })
               else if (block.name === 'update_state_card') onAction({ type: 'update_state_card', content: (input.content as string) ?? '' })
+              else if (block.name === 'update_writing_rules') onAction({ type: 'update_writing_rules', content: (input.content as string) ?? '' })
               else if (block.name === 'chat_reply') { onAction({ type: 'chat_reply', content: (input.message as string) ?? '' }); hasChatReply = true }
               else if (block.name === 'collect_foreshadowing') onAction({ type: 'collect_foreshadowing', id: (input.id as string) ?? '', revealNote: (input.reveal_note as string) ?? '' })
+              else if (block.name === 'add_foreshadowing') onAction({ type: 'add_foreshadowing', secret: (input.secret as string) ?? '', plantNote: (input.plant_note as string) ?? '' })
               else if (block.name === 'report_forward_foreshadowing') {
                 onAction({
                   type: 'report_forward_foreshadowing',
@@ -600,7 +658,7 @@ async function runOpenAIToolUse(
               accum.argBuf += tcd.function.arguments
               dlog.stream('openai-tool', `arg delta [${accum.name}] bufLen=${accum.argBuf.length}`, tcd.function.arguments.slice(0, 100))
               if (onStreamDelta) {
-                const streamKey = accum.name === 'write_story' ? 'content' : accum.name === 'update_state_card' ? 'content' : null
+                const streamKey = accum.name === 'write_story' ? 'content' : accum.name === 'update_state_card' ? 'content' : accum.name === 'update_writing_rules' ? 'content' : null
                 if (streamKey) {
                   const text = extractPartialStringValue(accum.argBuf, streamKey)
                   dlog.stream('openai-tool', `extract [${accum.name}] result=${text !== null ? text.length + ' chars' : 'null'}`)
@@ -636,8 +694,10 @@ async function runOpenAIToolUse(
       const args = JSON.parse(accum.argBuf) as Record<string, unknown>
       if (accum.name === 'write_story') onAction({ type: 'write_story', content: (args.content as string) ?? '' })
       else if (accum.name === 'update_state_card') onAction({ type: 'update_state_card', content: (args.content as string) ?? '' })
+      else if (accum.name === 'update_writing_rules') onAction({ type: 'update_writing_rules', content: (args.content as string) ?? '' })
       else if (accum.name === 'chat_reply') { onAction({ type: 'chat_reply', content: (args.message as string) ?? '' }); hasChatReply = true }
       else if (accum.name === 'collect_foreshadowing') onAction({ type: 'collect_foreshadowing', id: (args.id as string) ?? '', revealNote: (args.reveal_note as string) ?? '' })
+      else if (accum.name === 'add_foreshadowing') onAction({ type: 'add_foreshadowing', secret: (args.secret as string) ?? '', plantNote: (args.plant_note as string) ?? '' })
       else if (accum.name === 'report_forward_foreshadowing') {
         onAction({
           type: 'report_forward_foreshadowing',
@@ -670,6 +730,15 @@ const PLAIN_OUTPUT_INSTRUCTIONS = `
 <update_state_card>
 状态卡片全文，涵盖人物/地点/时间/关键事件
 </update_state_card>
+
+更新写作规则时（用户要求修改写作风格、叙事规则等）：
+<update_writing_rules>
+完整的写作规则文本
+</update_writing_rules>
+
+添加伏笔时（用户要求创建伏笔，或伏笔为空时主动设计）：
+<add_foreshadowing secret="隐藏的真相" plant_note="暗示与误导方式" />
+可多次使用添加多条。
 
 回收伏笔时（仅当伏笔档案有待回收项）：
 <collect_foreshadowing id="F1" reveal_note="如何揭示的说明" />
@@ -707,6 +776,16 @@ function parsePlainActions(text: string): AIAction[] {
 
   const stateCard = extractTag('update_state_card')
   if (stateCard) actions.push({ type: 'update_state_card', content: stateCard })
+
+  const writingRules = extractTag('update_writing_rules')
+  if (writingRules) actions.push({ type: 'update_writing_rules', content: writingRules })
+
+  // <add_foreshadowing secret="..." plant_note="..." />
+  const afRe = /<add_foreshadowing\s+secret="([^"]*?)"\s+plant_note="([^"]*?)"\s*\/?>/g
+  let afm
+  while ((afm = afRe.exec(text)) !== null) {
+    actions.push({ type: 'add_foreshadowing', secret: afm[1], plantNote: afm[2] })
+  }
 
   // <collect_foreshadowing id="F1" reveal_note="..." /> or with closing tag
   const fRe = /<collect_foreshadowing\s+id="([^"]*?)"\s+reveal_note="([^"]*?)"\s*\/?>/g
@@ -746,7 +825,7 @@ async function runOpenAIPlainFallback(
 ) {
   const base = resolveOpenAIBase(cfg.apiUrl)
   let full = ''
-  const STREAMABLE_TAGS = ['write_story', 'update_state_card', 'chat_reply'] as const
+  const STREAMABLE_TAGS = ['write_story', 'update_state_card', 'update_writing_rules', 'chat_reply'] as const
   let currentTag: string | null = null
   const notifiedTags = new Set<string>()
 
@@ -1119,12 +1198,10 @@ export async function checkApiConfig(cfg: ApiConfig): Promise<ApiCheckResult> {
 
     // 1. Connectivity — simple non-streaming chat
     let res: Response
+    const anthConnUrl = `${base}/v1/messages`
+    const anthConnHeaders = anthropicHeaders(cfg.apiKey)
     try {
-      res = await fetch(`${base}/v1/messages`, {
-        method: 'POST',
-        headers: anthropicHeaders(cfg.apiKey),
-        body: JSON.stringify({ model: cfg.apiModel, max_tokens: 32, messages: testMsg }),
-      })
+      res = await doStreamFetch(anthConnUrl, anthConnHeaders, JSON.stringify({ model: cfg.apiModel, max_tokens: 32, messages: testMsg }))
     } catch (e) {
       result.connectivity = { ok: false, message: `无法连接: ${(e as Error).message}` }
       return result
@@ -1145,15 +1222,11 @@ export async function checkApiConfig(cfg: ApiConfig): Promise<ApiCheckResult> {
 
     // 2. Tool use
     try {
-      const toolRes = await fetch(`${base}/v1/messages`, {
-        method: 'POST',
-        headers: anthropicHeaders(cfg.apiKey),
-        body: JSON.stringify({
+      const toolRes = await doStreamFetch(anthConnUrl, anthConnHeaders, JSON.stringify({
           model: cfg.apiModel, max_tokens: 64,
           messages: [{ role: 'user', content: '请调用test工具，参数msg填"ok"' }],
           tools: [{ name: 'test', description: '测试工具', input_schema: { type: 'object', properties: { msg: { type: 'string' } }, required: ['msg'] } }],
-        }),
-      })
+        }))
       if (toolRes.ok) {
         const td = await toolRes.json() as { content?: { type: string }[] }
         const hasToolUse = td.content?.some((b) => b.type === 'tool_use')
@@ -1169,11 +1242,7 @@ export async function checkApiConfig(cfg: ApiConfig): Promise<ApiCheckResult> {
 
     // 3. Streaming
     try {
-      const streamRes = await fetch(`${base}/v1/messages`, {
-        method: 'POST',
-        headers: anthropicHeaders(cfg.apiKey),
-        body: JSON.stringify({ model: cfg.apiModel, max_tokens: 16, stream: true, messages: testMsg }),
-      })
+      const streamRes = await doStreamFetch(anthConnUrl, anthConnHeaders, JSON.stringify({ model: cfg.apiModel, max_tokens: 16, stream: true, messages: testMsg }))
       if (streamRes.ok) {
         const reader = streamRes.body!.getReader()
         const chunk = await reader.read()
@@ -1194,12 +1263,11 @@ export async function checkApiConfig(cfg: ApiConfig): Promise<ApiCheckResult> {
 
     // 1. Connectivity — basic chat
     let res: Response
+    const connUrl = `${base}/chat/completions`
+    const connHeaders = openaiHeaders(cfg.apiKey)
+    const connBody = JSON.stringify({ model: cfg.apiModel, max_tokens: 32, messages: [{ role: 'system', content: 'reply OK' }, ...testMsg] })
     try {
-      res = await fetch(`${base}/chat/completions`, {
-        method: 'POST',
-        headers: openaiHeaders(cfg.apiKey),
-        body: JSON.stringify({ model: cfg.apiModel, max_tokens: 32, messages: [{ role: 'system', content: 'reply OK' }, ...testMsg] }),
-      })
+      res = await doStreamFetch(connUrl, connHeaders, connBody)
     } catch (e) {
       result.connectivity = { ok: false, message: `无法连接: ${(e as Error).message}` }
       return result
@@ -1269,11 +1337,11 @@ export async function checkApiConfig(cfg: ApiConfig): Promise<ApiCheckResult> {
 
     // 3. Streaming
     try {
-      const streamRes = await fetch(`${base}/chat/completions`, {
-        method: 'POST',
-        headers: openaiHeaders(cfg.apiKey),
-        body: JSON.stringify({ model: cfg.apiModel, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'say hi' }] }),
-      })
+      const streamRes = await doStreamFetch(
+        `${base}/chat/completions`,
+        openaiHeaders(cfg.apiKey),
+        JSON.stringify({ model: cfg.apiModel, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'say hi' }] }),
+      )
       if (streamRes.ok) {
         const reader = streamRes.body!.getReader()
         const chunk = await reader.read()

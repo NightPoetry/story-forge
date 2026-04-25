@@ -86,6 +86,7 @@ export interface FullProjectData {
   nodes: Record<string, StoryNodeData>
   rootNodeId: string | null
   writingGuide: string
+  aiWritingRules?: string
   writingGuideChatHistory?: ChatMessage[]
   trashedNodes?: TrashedNodeGroup[]
   // Legacy fields kept for reading old saves

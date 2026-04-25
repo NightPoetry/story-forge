@@ -27,7 +27,7 @@ interface ProjectStore {
   restoreProject: (id: string) => Promise<void>
   permanentDeleteProject: (id: string) => Promise<void>
   renameProject: (id: string, name: string) => Promise<void>
-  saveProjectData: (projectId: string, nodes: FullProjectData['nodes'], rootNodeId: string | null, writingGuide?: string, writingGuideChatHistory?: ChatMessage[], trashedNodes?: TrashedNodeGroup[]) => Promise<void>
+  saveProjectData: (projectId: string, nodes: FullProjectData['nodes'], rootNodeId: string | null, writingGuide?: string, aiWritingRules?: string, writingGuideChatHistory?: ChatMessage[], trashedNodes?: TrashedNodeGroup[]) => Promise<void>
 
   // Export
   exportProjectBackup: (projectId: string, currentNodes?: FullProjectData['nodes'], rootNodeId?: string | null) => Promise<void>
@@ -119,7 +119,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
     if (data) await writeProjectData({ ...data, name })
   },
 
-  saveProjectData: async (projectId, nodes, rootNodeId, writingGuide = '', writingGuideChatHistory = [], trashedNodes = []) => {
+  saveProjectData: async (projectId, nodes, rootNodeId, writingGuide = '', aiWritingRules = '', writingGuideChatHistory = [], trashedNodes = []) => {
     const meta = get().projects.find((p) => p.id === projectId)
     if (!meta) return
 
@@ -132,6 +132,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
       nodes,
       rootNodeId,
       writingGuide,
+      aiWritingRules,
       writingGuideChatHistory,
       trashedNodes: trashedNodes ?? [],
       createdAt: meta.createdAt,

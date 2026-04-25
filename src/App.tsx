@@ -20,7 +20,7 @@ export default function App() {
     apiKey, apiUrl, apiFormat, apiModel,
     setApiKey, setApiUrl, setApiFormat, setApiModel, setToolStreamMode,
     nodes, rootNodeId, editingNodeId,
-    projectWritingGuide, writingGuideChatHistory,
+    projectWritingGuide, aiWritingRules, writingGuideChatHistory,
     trashedNodes, autoSave, undo, redo,
   } = useStore()
 
@@ -48,29 +48,29 @@ export default function App() {
     if (!autoSave) return
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(async () => {
-      await saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, writingGuideChatHistory, trashedNodes)
+      await saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes)
       setIsDirty(false)
     }, 1500)
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current) }
-  }, [nodes, rootNodeId, projectWritingGuide, writingGuideChatHistory, trashedNodes, currentProjectId, autoSave])
+  }, [nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes, currentProjectId, autoSave])
 
   // Manual save
   const handleManualSave = useCallback(async () => {
     if (!currentProjectId) return
     if (saveTimer.current) clearTimeout(saveTimer.current)
-    await saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, writingGuideChatHistory, trashedNodes)
+    await saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes)
     setIsDirty(false)
-  }, [currentProjectId, nodes, rootNodeId, projectWritingGuide, writingGuideChatHistory, trashedNodes])
+  }, [currentProjectId, nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes])
 
   // Back to projects
   const handleBack = useCallback(async () => {
     if (currentProjectId) {
       if (saveTimer.current) clearTimeout(saveTimer.current)
-      await saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, writingGuideChatHistory, trashedNodes)
+      await saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes)
       setIsDirty(false)
     }
     await closeProject()
-  }, [currentProjectId, nodes, rootNodeId, projectWritingGuide, writingGuideChatHistory, trashedNodes])
+  }, [currentProjectId, nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes])
 
   // Keyboard shortcuts: Ctrl+S, Ctrl+Z, Ctrl+R, Ctrl+Shift+Z
   useEffect(() => {

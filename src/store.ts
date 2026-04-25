@@ -34,6 +34,7 @@ interface AppStore {
   editingNodeId: string | null
   isGenerating: boolean
   projectWritingGuide: string
+  aiWritingRules: string
   writingGuideChatHistory: ChatMessage[]
   trashedNodes: TrashedNodeGroup[]
 
@@ -60,7 +61,7 @@ interface AppStore {
   toolStreamMode: ToolStreamMode
 
   // Story actions
-  resetWithProjectData: (nodes: Record<string, StoryNodeData>, rootNodeId: string | null, writingGuide?: string, writingGuideChatHistory?: ChatMessage[], trashedNodes?: TrashedNodeGroup[]) => void
+  resetWithProjectData: (nodes: Record<string, StoryNodeData>, rootNodeId: string | null, writingGuide?: string, aiWritingRules?: string, writingGuideChatHistory?: ChatMessage[], trashedNodes?: TrashedNodeGroup[]) => void
   initRootNode: () => void
   continueNode: (nodeId: string) => string
   branchNode: (nodeId: string) => string
@@ -85,6 +86,7 @@ interface AppStore {
   // Settings actions
   setGlobalSettings: (content: string) => void
   setProjectWritingGuide: (content: string) => void
+  setAiWritingRules: (content: string) => void
   addWritingGuideChatMessage: (msg: ChatMessage) => void
   setWritingGuideChatHistory: (msgs: ChatMessage[]) => void
   setAutoSave: (v: boolean) => void
@@ -108,7 +110,7 @@ interface AppStore {
   // Helpers
   getAncestorChain: (nodeId: string) => StoryNodeData[]
   getChildren: (nodeId: string) => StoryNodeData[]
-  getProjectSnapshot: () => Pick<FullProjectData, 'nodes' | 'rootNodeId' | 'writingGuide' | 'writingGuideChatHistory' | 'trashedNodes'>
+  getProjectSnapshot: () => Pick<FullProjectData, 'nodes' | 'rootNodeId' | 'writingGuide' | 'aiWritingRules' | 'writingGuideChatHistory' | 'trashedNodes'>
 }
 
 export const useStore = create<AppStore>()(
@@ -121,6 +123,7 @@ export const useStore = create<AppStore>()(
       editingNodeId: null,
       isGenerating: false,
       projectWritingGuide: '',
+      aiWritingRules: '',
       writingGuideChatHistory: [],
       trashedNodes: [],
       undoStack: [],
@@ -142,8 +145,8 @@ export const useStore = create<AppStore>()(
       soundEnabled: true,
       toolStreamMode: 'streaming' as ToolStreamMode,
 
-      resetWithProjectData: (nodes, rootNodeId, writingGuide = '', writingGuideChatHistory = [], trashedNodes = []) =>
-        set({ nodes, rootNodeId, selectedNodeId: rootNodeId, editingNodeId: null, isGenerating: false, projectWritingGuide: writingGuide, writingGuideChatHistory, trashedNodes, undoStack: [], redoStack: [] }),
+      resetWithProjectData: (nodes, rootNodeId, writingGuide = '', aiWritingRules = '', writingGuideChatHistory = [], trashedNodes = []) =>
+        set({ nodes, rootNodeId, selectedNodeId: rootNodeId, editingNodeId: null, isGenerating: false, projectWritingGuide: writingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes, undoStack: [], redoStack: [] }),
 
       initRootNode: () => {
         if (get().rootNodeId && get().nodes[get().rootNodeId!]) return
@@ -300,6 +303,7 @@ export const useStore = create<AppStore>()(
 
       setGlobalSettings: (content) => set({ globalSettings: content }),
       setProjectWritingGuide: (content) => set({ projectWritingGuide: content }),
+      setAiWritingRules: (content) => set({ aiWritingRules: content }),
       addWritingGuideChatMessage: (msg) =>
         set((s) => ({ writingGuideChatHistory: [...s.writingGuideChatHistory, msg] })),
       setWritingGuideChatHistory: (msgs) => set({ writingGuideChatHistory: msgs }),
@@ -395,6 +399,7 @@ export const useStore = create<AppStore>()(
         nodes: get().nodes,
         rootNodeId: get().rootNodeId,
         writingGuide: get().projectWritingGuide,
+        aiWritingRules: get().aiWritingRules,
         writingGuideChatHistory: get().writingGuideChatHistory,
         trashedNodes: get().trashedNodes,
       }),
