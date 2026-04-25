@@ -163,6 +163,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
             foreshadowingsEmpty: curNode.foreshadowings.length === 0,
             stateCardContent: curNode.stateCard.content,
             storyContext: curNode.storyContent,
+            existingForeshadowings: curNode.foreshadowings.map(f => ({ id: f.id, secret: f.secret })),
           }
           if (ctx.aiWritingRulesEmpty || ctx.foreshadowingsEmpty) {
             setStage('正在初始化…')
