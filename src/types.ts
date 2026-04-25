@@ -33,6 +33,13 @@ export interface ForwardForeshadowingReport {
   candidates: ForwardForeshadowingCandidate[]
 }
 
+export interface ForeshadowingChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+  suggestion?: { secret?: string; plantNote?: string; revealNote?: string }
+  applied?: boolean
+}
+
 export interface ForeshadowingItem {
   id: string            // Readable ID like "F1", "F2"
   secret: string        // The hidden truth (only the author knows)
@@ -41,6 +48,7 @@ export interface ForeshadowingItem {
   createdAt: number
   collectedAt?: number
   revealNote?: string   // How it was revealed in the story
+  chatHistory?: ForeshadowingChatMessage[]
 }
 
 export interface TrashedNodeGroup {
