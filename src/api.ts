@@ -972,7 +972,10 @@ const GUIDE_TOOLS = [
   },
 ] as const
 
-function buildGuideSystemPrompt(currentGuide: string): string {
+function buildGuideSystemPrompt(currentGuide: string, storyContext?: string): string {
+  const contextSection = storyContext?.trim()
+    ? `\n\n你能看到以下故事信息，据此可以更有针对性地引导设定：\n${storyContext.trim()}`
+    : ''
   return `你是故事创作顾问，通过对话帮助作者完善故事设定文档。
 
 工作方式：
@@ -991,7 +994,7 @@ function buildGuideSystemPrompt(currentGuide: string): string {
 update_guide 要求：仅写已确认内容，可用标签【类型】【背景】【人物】【冲突】【文风】【其他】
 
 当前设定文档：
-${currentGuide.trim() || '（尚无内容）'}`
+${currentGuide.trim() || '（尚无内容）'}${contextSection}`
 }
 
 export async function runSettingsGuideChat(
@@ -1003,8 +1006,9 @@ export async function runSettingsGuideChat(
   onError: (err: string) => void,
   signal?: AbortSignal,
   onStreamDelta?: (toolName: string, text: string) => void,
+  storyContext?: string,
 ): Promise<void> {
-  const systemPrompt = buildGuideSystemPrompt(currentGuide)
+  const systemPrompt = buildGuideSystemPrompt(currentGuide, storyContext)
   type ToolDef = { name: string; description: string; input_schema: { type: 'object'; properties: Record<string, unknown>; required: string[] } }
   const tools = [...GUIDE_TOOLS] as unknown as ToolDef[]
 
@@ -1436,7 +1440,8 @@ export async function runAutoInit(
 ) {
   const storyInfo = [
     ctx.stateCardContent ? `状态卡片：\n${ctx.stateCardContent}` : '',
-    ctx.storyContext ? `故事上文：\n${ctx.storyContext.slice(0, 500)}` : '',
+    ctx.storyContext ? `故事上文：\n${ctx.storyContext.slice(0, 1000)}` : '',
+    ctx.existingForeshadowings?.length ? `已有伏笔：\n${ctx.existingForeshadowings.map(f => `[${f.id}] ${f.secret}`).join('\n')}` : '',
   ].filter(Boolean).join('\n\n')
 
   const tasks: InitTask[] = []

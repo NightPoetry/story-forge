@@ -14,6 +14,7 @@ export default function WritingGuideModal({ onClose }: Props) {
     projectWritingGuide, setProjectWritingGuide,
     writingGuideChatHistory, addWritingGuideChatMessage,
     apiKey, apiUrl, apiFormat, apiModel,
+    nodes, selectedNodeId, getAncestorChain, aiWritingRules,
   } = useStore()
 
   const [guideDraft, setGuideDraft] = useState(projectWritingGuide)
@@ -23,6 +24,21 @@ export default function WritingGuideModal({ onClose }: Props) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const cfg = { apiKey, apiUrl, apiFormat, apiModel }
+
+  const buildStoryContext = () => {
+    const parts: string[] = []
+    const node = selectedNodeId ? nodes[selectedNodeId] : null
+    if (node) {
+      const ancestors = getAncestorChain(selectedNodeId!)
+      const chain = [...ancestors, node].filter(n => n.storyContent.trim())
+      if (chain.length > 0) parts.push(chain.map(n => `【${n.title}】${n.storyContent.trim().slice(0, 300)}`).join('\n'))
+      if (node.stateCard.content.trim()) parts.push(`状态卡片：${node.stateCard.content.trim()}`)
+      const fs = node.foreshadowings?.filter(f => f.status === 'planted') ?? []
+      if (fs.length > 0) parts.push(`伏笔(${fs.length}条)：${fs.map(f => `[${f.id}]${f.secret.slice(0, 40)}`).join('；')}`)
+    }
+    if (aiWritingRules.trim()) parts.push(`写作规则：${aiWritingRules.trim().slice(0, 200)}`)
+    return parts.join('\n\n')
+  }
 
   // Sync draft when guide is updated from outside (e.g. another component)
   useEffect(() => { setGuideDraft(projectWritingGuide) }, [projectWritingGuide])
@@ -64,6 +80,7 @@ export default function WritingGuideModal({ onClose }: Props) {
       (toolName, text) => {
         if (toolName === 'update_guide') setGuideDraft(text)
       },
+      buildStoryContext(),
     )
   }
 
@@ -108,6 +125,7 @@ export default function WritingGuideModal({ onClose }: Props) {
       (toolName, text) => {
         if (!controller.signal.aborted && toolName === 'update_guide') setGuideDraft(text)
       },
+      buildStoryContext(),
     )
   }
 

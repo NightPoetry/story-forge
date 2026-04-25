@@ -40,6 +40,8 @@ export default function GlobalSettings() {
       }
       if (node.storyContent.trim()) parts.push(`# 当前节点「${node.title}」\n${node.storyContent.trim().slice(0, 500)}`)
       if (node.stateCard.content.trim()) parts.push(`# 状态卡片\n${node.stateCard.content.trim()}`)
+      const fs = node.foreshadowings?.filter(f => f.status === 'planted') ?? []
+      if (fs.length > 0) parts.push(`# 伏笔档案\n${fs.map(f => `[${f.id}] ${f.secret}`).join('\n')}`)
     }
     if (projectWritingGuide.trim()) parts.push(`# 故事设定\n${projectWritingGuide.trim()}`)
     return parts.join('\n\n---\n\n')
