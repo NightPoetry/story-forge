@@ -309,6 +309,14 @@ function ForeshadowingEditModal({
     return parts.join('\n\n---\n\n')
   }
 
+  const parseSuggestion = (args: Record<string, string>): ChatMsg['suggestion'] => {
+    const s: ChatMsg['suggestion'] = {}
+    if (args.secret && args.secret !== secret) s.secret = args.secret
+    if (args.plant_note && args.plant_note !== plantNote) s.plantNote = args.plant_note
+    if (args.reveal_note && args.reveal_note !== revealNote) s.revealNote = args.reveal_note
+    return s
+  }
+
   const handleAISend = async () => {
     if (!chatInput.trim() || generating || !apiKey) return
     const userText = chatInput.trim()
@@ -413,17 +421,28 @@ ${globalSettings.trim() ? `\n写作规则：${globalSettings.trim()}` : ''}`
           signal: controller.signal,
         })
         if (res.ok) {
-          const data = await res.json() as { choices?: { message: { content?: string; tool_calls?: { function: { arguments: string } }[] } }[] }
+          const data = await res.json() as { choices?: { message: { content?: string; tool_calls?: { function: { name: string; arguments: string } }[] } }[] }
           const msg = data.choices?.[0]?.message
+          dlog.info('foreshadowing-modal', `response: content=${(msg?.content ?? '').length} tool_calls=${msg?.tool_calls?.length ?? 0}`)
           reply = msg?.content ?? ''
           const tc = msg?.tool_calls?.[0]
           if (tc) {
+            dlog.info('foreshadowing-modal', `tool: ${tc.function.name} args=${tc.function.arguments.length}chars`)
             try {
               const args = JSON.parse(tc.function.arguments) as Record<string, string>
-              reply = args.message ?? reply
+              reply = args.message || reply
               suggestion = parseSuggestion(args)
-            } catch { /* ignore */ }
+            } catch (e) {
+              dlog.warn('foreshadowing-modal', `parse error: ${(e as Error).message} raw=${tc.function.arguments.slice(0, 100)}`)
+            }
           }
+          if (!reply && !tc) {
+            reply = msg?.content || '（模型未按预期格式回复）'
+          }
+        } else {
+          const errText = await res.text().catch(() => '')
+          dlog.warn('foreshadowing-modal', `HTTP ${res.status}: ${errText.slice(0, 200)}`)
+          reply = `请求失败 (HTTP ${res.status})`
         }
       }
 
@@ -441,14 +460,6 @@ ${globalSettings.trim() ? `\n写作规则：${globalSettings.trim()}` : ''}`
       }
     }
     setGenerating(false)
-  }
-
-  const parseSuggestion = (args: Record<string, string>): ChatMsg['suggestion'] => {
-    const s: ChatMsg['suggestion'] = {}
-    if (args.secret && args.secret !== secret) s.secret = args.secret
-    if (args.plant_note && args.plant_note !== plantNote) s.plantNote = args.plant_note
-    if (args.reveal_note && args.reveal_note !== revealNote) s.revealNote = args.reveal_note
-    return s
   }
 
   const applySuggestion = (idx: number) => {
