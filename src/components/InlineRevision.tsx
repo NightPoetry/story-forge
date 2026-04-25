@@ -188,11 +188,14 @@ function RevisionModal({
       const ancestors = node ? getAncestorChain(nodeId) : []
       const contextParts: string[] = []
       const withContent = ancestors.filter(a => a.storyContent.trim())
-      if (withContent.length > 0) contextParts.push(withContent.map(a => a.storyContent.trim().slice(0, 200)).join('\n'))
-      if (node?.storyContent) contextParts.push(node.storyContent.slice(Math.max(0, selectionStart - 200), selectionEnd + 200))
-      if (node?.stateCard.content.trim()) contextParts.push(`状态卡片：${node.stateCard.content.trim().slice(0, 300)}`)
+      if (withContent.length > 0) contextParts.push('故事上文：\n' + withContent.map(a => `【${a.title}】${a.storyContent.trim().slice(0, 300)}`).join('\n'))
+      if (node?.storyContent) contextParts.push(`当前节点正文（选区附近）：\n${node.storyContent.slice(Math.max(0, selectionStart - 300), selectionEnd + 300)}`)
+      if (node?.stateCard.content.trim()) contextParts.push(`状态卡片：\n${node.stateCard.content.trim()}`)
+      if (projectWritingGuide.trim()) contextParts.push(`故事设定：\n${projectWritingGuide.trim().slice(0, 300)}`)
+      const fs = node?.foreshadowings?.filter(f => f.status === 'planted') ?? []
+      if (fs.length > 0) contextParts.push(`伏笔档案：\n${fs.map(f => `[${f.id}] ${f.secret}`).join('\n')}`)
 
-      const systemPrompt = `你是文本修改助手。作者选中了一段文字要求修改。
+      const systemPrompt = `你是文本修改助手。作者选中了一段文字要求修改。你能看到完整的故事上下文、设定和伏笔，修改时必须保持与它们的一致性。
 
 选中的原文：
 「${originalText}」
