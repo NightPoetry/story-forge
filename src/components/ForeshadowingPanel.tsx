@@ -455,10 +455,21 @@ ${globalSettings.trim() ? `\n写作规则：${globalSettings.trim()}` : ''}`
     const msg = chatHistory[idx]
     if (!msg?.suggestion) return
     const s = msg.suggestion
+    const prev = { secret, plantNote, revealNote }
     if (s.secret) { setSecret(s.secret); onUpdate(item.id, { secret: s.secret }) }
     if (s.plantNote) { setPlantNote(s.plantNote); onUpdate(item.id, { plantNote: s.plantNote }) }
     if (s.revealNote) { setRevealNote(s.revealNote); onUpdate(item.id, { revealNote: s.revealNote }) }
-    setChatHistory(prev => prev.map((m, i) => i === idx ? { ...m, applied: true } : m))
+    setChatHistory(p => p.map((m, i) => i === idx ? { ...m, applied: true, _prev: prev } : m))
+  }
+
+  const undoSuggestion = (idx: number) => {
+    const msg = chatHistory[idx] as ChatMsg & { _prev?: { secret: string; plantNote: string; revealNote: string } }
+    if (!msg?._prev) return
+    const p = msg._prev
+    setSecret(p.secret); onUpdate(item.id, { secret: p.secret })
+    setPlantNote(p.plantNote); onUpdate(item.id, { plantNote: p.plantNote })
+    if (isCollected) { setRevealNote(p.revealNote); onUpdate(item.id, { revealNote: p.revealNote }) }
+    setChatHistory(prev => prev.map((m, i) => i === idx ? { ...m, applied: false, _prev: undefined } : m))
   }
 
   return (
@@ -600,13 +611,22 @@ ${globalSettings.trim() ? `\n写作规则：${globalSettings.trim()}` : ''}`
                         <span className="text-xs" style={{ color: '#b8916a', fontSize: '10px', fontWeight: 500 }}>
                           {msg.applied ? '已应用' : '建议修改'}
                         </span>
-                        {!msg.applied && (
-                          <button onClick={() => applySuggestion(i)}
-                            className="text-xs px-2.5 py-0.5 rounded transition-all hover:brightness-110"
-                            style={{ background: 'rgba(180,140,90,0.25)', color: '#b8916a', border: '1px solid rgba(180,140,90,0.4)', fontSize: '10px', fontWeight: 500 }}>
-                            应用修改
-                          </button>
-                        )}
+                        <div className="flex gap-1.5">
+                          {msg.applied && (
+                            <button onClick={() => undoSuggestion(i)}
+                              className="text-xs px-2 py-0.5 rounded transition-all hover:opacity-80"
+                              style={{ color: 'rgba(200,80,80,0.7)', border: '1px solid rgba(200,80,80,0.25)', fontSize: '10px' }}>
+                              撤销
+                            </button>
+                          )}
+                          {!msg.applied && (
+                            <button onClick={() => applySuggestion(i)}
+                              className="text-xs px-2.5 py-0.5 rounded transition-all hover:brightness-110"
+                              style={{ background: 'rgba(180,140,90,0.25)', color: '#b8916a', border: '1px solid rgba(180,140,90,0.4)', fontSize: '10px', fontWeight: 500 }}>
+                              应用修改
+                            </button>
+                          )}
+                        </div>
                       </div>
                       {msg.suggestion.secret && (
                         <div className="mb-1">
