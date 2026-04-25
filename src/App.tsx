@@ -80,7 +80,9 @@ export default function App() {
         e.preventDefault()
         handleManualSave()
       }
-      const inEditable = document.activeElement?.tagName === 'TEXTAREA' || document.activeElement?.tagName === 'INPUT'
+      const active = document.activeElement as HTMLElement | null
+      const isStoryTextarea = active?.id === 'story-textarea'
+      const inEditable = (active?.tagName === 'TEXTAREA' || active?.tagName === 'INPUT') && !isStoryTextarea
       if (e.key === 'z' && !e.shiftKey && !inEditable) {
         e.preventDefault()
         undo()
