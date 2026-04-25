@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
+import { FloatingEditButton, RevisionOverlay } from './InlineRevision'
 
 interface Props {
   nodeId: string
@@ -138,7 +139,7 @@ export default function StoryPanel({ nodeId, isStreaming }: Props) {
       </div>
 
       {/* Scrollable story area */}
-      <div className="flex-1 overflow-y-auto px-6 sm:px-10 py-6">
+      <div className="flex-1 overflow-y-auto px-6 sm:px-10 py-6" style={{ position: 'relative' }}>
         <textarea
           id="story-textarea"
           ref={textareaRef}
@@ -156,6 +157,15 @@ export default function StoryPanel({ nodeId, isStreaming }: Props) {
             lineHeight: editorLineHeight,
             letterSpacing: `${editorLetterSpacing}em`,
           }}
+        />
+        <FloatingEditButton textareaRef={textareaRef} nodeId={nodeId} disabled={isStreaming} />
+        <RevisionOverlay
+          textareaRef={textareaRef}
+          nodeId={nodeId}
+          editorFontSize={editorFontSize}
+          editorLineHeight={editorLineHeight}
+          editorLetterSpacing={editorLetterSpacing}
+          isStreaming={isStreaming}
         />
       </div>
 
