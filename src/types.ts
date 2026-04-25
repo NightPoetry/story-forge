@@ -60,6 +60,27 @@ export interface TrashedNodeGroup {
   title: string
 }
 
+// ── Inline Revisions ─────────────────────────────────────────────────────
+
+export interface RevisionSnapshot {
+  id: string
+  text: string
+  timestamp: number
+  source: 'manual' | 'ai'
+  parentId: string | null
+  children: string[]
+}
+
+export interface RevisionPoint {
+  id: string
+  anchorBefore: string
+  anchorAfter: string
+  currentSnapshotId: string
+  rootSnapshotId: string
+  snapshots: Record<string, RevisionSnapshot>
+  createdAt: number
+}
+
 export interface StoryNodeData {
   id: string
   title: string
@@ -72,6 +93,7 @@ export interface StoryNodeData {
   targetWordCount?: number
   foreshadowings: ForeshadowingItem[]
   foreshadowingCounter: number
+  revisionPoints?: RevisionPoint[]
   forwardForeshadowing?: ForwardForeshadowingReport
 }
 

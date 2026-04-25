@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { ApiFormat, BranchType, ChatMessage, ForeshadowingItem, ForwardForeshadowingReport, FullProjectData, StateCardData, StoryNodeData, ToolStreamMode, TrashedNodeGroup } from './types'
+import { ApiFormat, BranchType, ChatMessage, ForeshadowingItem, ForwardForeshadowingReport, FullProjectData, RevisionPoint, RevisionSnapshot, StateCardData, StoryNodeData, ToolStreamMode, TrashedNodeGroup } from './types'
 import { genId } from './api'
 
 function makeNode(
@@ -82,6 +82,12 @@ interface AppStore {
 
   // Forward foreshadowing
   updateForwardForeshadowing: (nodeId: string, report: ForwardForeshadowingReport) => void
+
+  // Revision actions
+  addRevisionPoint: (nodeId: string, originalText: string, newText: string, anchorBefore: string, anchorAfter: string, source: 'manual' | 'ai') => string
+  restoreRevisionSnapshot: (nodeId: string, rpId: string, snapshotId: string) => void
+  addRevisionBranch: (nodeId: string, rpId: string, newText: string, source: 'manual' | 'ai') => void
+  removeRevisionPoint: (nodeId: string, rpId: string) => void
 
   // Settings actions
   setGlobalSettings: (content: string) => void
@@ -300,6 +306,68 @@ export const useStore = create<AppStore>()(
             [nodeId]: { ...s.nodes[nodeId], forwardForeshadowing: report },
           },
         })),
+
+      addRevisionPoint: (nodeId, originalText, newText, anchorBefore, anchorAfter, source) => {
+        const node = get().nodes[nodeId]
+        if (!node) return ''
+        get().pushUndoSnapshot()
+        const rpId = genId()
+        const origSnapId = genId()
+        const newSnapId = genId()
+        const origSnap: RevisionSnapshot = { id: origSnapId, text: originalText, timestamp: Date.now(), source: 'manual', parentId: null, children: [newSnapId] }
+        const newSnap: RevisionSnapshot = { id: newSnapId, text: newText, timestamp: Date.now(), source, parentId: origSnapId, children: [] }
+        const rp: RevisionPoint = { id: rpId, anchorBefore, anchorAfter, currentSnapshotId: newSnapId, rootSnapshotId: origSnapId, snapshots: { [origSnapId]: origSnap, [newSnapId]: newSnap }, createdAt: Date.now() }
+        const updatedContent = node.storyContent.replace(anchorBefore + originalText + anchorAfter, anchorBefore + newText + anchorAfter)
+        set((s) => ({
+          nodes: { ...s.nodes, [nodeId]: { ...s.nodes[nodeId], storyContent: updatedContent, revisionPoints: [...(s.nodes[nodeId].revisionPoints ?? []), rp] } },
+        }))
+        return rpId
+      },
+
+      restoreRevisionSnapshot: (nodeId, rpId, snapshotId) => {
+        const node = get().nodes[nodeId]
+        if (!node) return
+        const rps = node.revisionPoints ?? []
+        const rp = rps.find(r => r.id === rpId)
+        if (!rp || !rp.snapshots[snapshotId]) return
+        get().pushUndoSnapshot()
+        const curText = rp.snapshots[rp.currentSnapshotId].text
+        const newText = rp.snapshots[snapshotId].text
+        const idx = node.storyContent.indexOf(rp.anchorBefore + curText + rp.anchorAfter)
+        if (idx === -1) return
+        const updatedContent = node.storyContent.slice(0, idx) + rp.anchorBefore + newText + rp.anchorAfter + node.storyContent.slice(idx + rp.anchorBefore.length + curText.length + rp.anchorAfter.length)
+        const updatedRp = { ...rp, currentSnapshotId: snapshotId }
+        set((s) => ({
+          nodes: { ...s.nodes, [nodeId]: { ...s.nodes[nodeId], storyContent: updatedContent, revisionPoints: (s.nodes[nodeId].revisionPoints ?? []).map(r => r.id === rpId ? updatedRp : r) } },
+        }))
+      },
+
+      addRevisionBranch: (nodeId, rpId, newText, source) => {
+        const node = get().nodes[nodeId]
+        if (!node) return
+        const rps = node.revisionPoints ?? []
+        const rp = rps.find(r => r.id === rpId)
+        if (!rp) return
+        get().pushUndoSnapshot()
+        const curSnap = rp.snapshots[rp.currentSnapshotId]
+        const curText = curSnap.text
+        const newSnapId = genId()
+        const newSnap: RevisionSnapshot = { id: newSnapId, text: newText, timestamp: Date.now(), source, parentId: rp.currentSnapshotId, children: [] }
+        const updatedSnapshots = { ...rp.snapshots, [rp.currentSnapshotId]: { ...curSnap, children: [...curSnap.children, newSnapId] }, [newSnapId]: newSnap }
+        const idx = node.storyContent.indexOf(rp.anchorBefore + curText + rp.anchorAfter)
+        if (idx === -1) return
+        const updatedContent = node.storyContent.slice(0, idx) + rp.anchorBefore + newText + rp.anchorAfter + node.storyContent.slice(idx + rp.anchorBefore.length + curText.length + rp.anchorAfter.length)
+        const updatedRp = { ...rp, currentSnapshotId: newSnapId, snapshots: updatedSnapshots }
+        set((s) => ({
+          nodes: { ...s.nodes, [nodeId]: { ...s.nodes[nodeId], storyContent: updatedContent, revisionPoints: (s.nodes[nodeId].revisionPoints ?? []).map(r => r.id === rpId ? updatedRp : r) } },
+        }))
+      },
+
+      removeRevisionPoint: (nodeId, rpId) => {
+        set((s) => ({
+          nodes: { ...s.nodes, [nodeId]: { ...s.nodes[nodeId], revisionPoints: (s.nodes[nodeId].revisionPoints ?? []).filter(r => r.id !== rpId) } },
+        }))
+      },
 
       setGlobalSettings: (content) => set({ globalSettings: content }),
       setProjectWritingGuide: (content) => set({ projectWritingGuide: content }),
