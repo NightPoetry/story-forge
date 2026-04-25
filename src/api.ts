@@ -1417,6 +1417,7 @@ interface AutoInitContext {
   foreshadowingsEmpty: boolean
   stateCardContent: string
   storyContext: string
+  existingForeshadowings?: { id: string; secret: string }[]
 }
 
 type InitTask = {
@@ -1447,10 +1448,13 @@ export async function runAutoInit(
     })
   }
   if (ctx.foreshadowingsEmpty && (ctx.stateCardContent || !ctx.stateCardEmpty)) {
+    const existingNote = ctx.existingForeshadowings?.length
+      ? `\n\n已有伏笔（不要重复）：\n${ctx.existingForeshadowings.map(f => `- [${f.id}] ${f.secret}`).join('\n')}`
+      : ''
     tasks.push({
       label: '伏笔',
       tool: ADD_FORESHADOWING_TOOL as unknown as InitTask['tool'],
-      prompt: `根据以下故事信息，设计 2-3 条逆伏笔（每条包含隐藏真相和误导方式）。直接调用 add_foreshadowings 工具。\n\n${storyInfo}`,
+      prompt: `根据以下故事信息，设计 2-3 条逆伏笔（每条包含隐藏真相和误导方式）。直接调用 add_foreshadowings 工具。${existingNote}\n\n${storyInfo}`,
     })
   }
   if (tasks.length === 0) { onComplete(); return }
