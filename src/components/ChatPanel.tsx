@@ -508,39 +508,102 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
 
 function MessageBubble({ msg }: { msg: ChatMessage }) {
   const isUser = msg.role === 'user'
-  const [expanded, setExpanded] = useState(false)
-  const truncated = msg.content.length > 200 && !expanded
-  const display = truncated ? msg.content.slice(0, 200) + '…' : msg.content
+  const [modalOpen, setModalOpen] = useState(false)
+  const isLong = msg.content.length > 200
+  const display = isLong ? msg.content.slice(0, 200) + '…' : msg.content
 
   return (
-    <div className={`msg-enter mb-3 ${isUser ? 'pl-3' : ''}`}>
-      <div className="text-xs mb-1"
-        style={{
-          color: isUser ? 'var(--text-muted)' : 'var(--gold-dim)',
-          letterSpacing: '0.05em',
-          fontSize: '10px',
-        }}>
-        {isUser ? '你' : 'AI'}
+    <>
+      <div className={`msg-enter mb-3 ${isUser ? 'pl-3' : ''}`}>
+        <div className="text-xs mb-1"
+          style={{
+            color: isUser ? 'var(--text-muted)' : 'var(--gold-dim)',
+            letterSpacing: '0.05em',
+            fontSize: '10px',
+          }}>
+          {isUser ? '你' : 'AI'}
+        </div>
+        <div
+          className="text-xs rounded p-3"
+          style={{
+            background: isUser ? 'rgba(240,235,224,0.06)' : 'rgba(201,169,110,0.05)',
+            border: `1px solid ${isUser ? 'rgba(240,235,224,0.08)' : 'var(--border-gold)'}`,
+            color: 'var(--text-primary)',
+            lineHeight: '1.65',
+            fontFamily: '"DM Sans", sans-serif',
+            fontSize: '12px',
+            opacity: 0.9,
+          }}>
+          {display}
+          {isLong && (
+            <span
+              onClick={() => setModalOpen(true)}
+              style={{ color: 'var(--gold)', marginLeft: '6px', fontSize: '10px', cursor: 'pointer' }}>
+              展开
+            </span>
+          )}
+        </div>
       </div>
+
+      {modalOpen && (
+        <MessageModal
+          role={msg.role}
+          content={msg.content}
+          onClose={() => setModalOpen(false)}
+        />
+      )}
+    </>
+  )
+}
+
+function MessageModal({ role, content, onClose }: { role: string; content: string; onClose: () => void }) {
+  const isUser = role === 'user'
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [onClose])
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: 'rgba(10,9,18,0.7)' }}
+      onClick={onClose}>
       <div
-        className="text-xs rounded p-3"
-        onClick={() => !isUser && msg.content.length > 200 && setExpanded((e) => !e)}
+        className="relative flex flex-col rounded-lg"
         style={{
-          background: isUser ? 'rgba(240,235,224,0.06)' : 'rgba(201,169,110,0.05)',
-          border: `1px solid ${isUser ? 'rgba(240,235,224,0.08)' : 'var(--border-gold)'}`,
-          color: 'var(--text-primary)',
-          lineHeight: '1.65',
-          fontFamily: '"DM Sans", sans-serif',
-          fontSize: '12px',
-          opacity: 0.9,
-          cursor: !isUser && msg.content.length > 200 ? 'pointer' : 'default',
-        }}>
-        {display}
-        {msg.content.length > 200 && !isUser && (
-          <span style={{ color: 'var(--gold-dim)', marginLeft: '4px', fontSize: '10px' }}>
-            {expanded ? '收起' : '展开'}
+          width: 'min(720px, 90vw)',
+          maxHeight: '80vh',
+          background: 'var(--bg-card)',
+          border: `1px solid ${isUser ? 'var(--border-subtle)' : 'var(--border-gold)'}`,
+          boxShadow: '0 24px 60px rgba(0,0,0,0.5)',
+        }}
+        onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3 flex-shrink-0"
+          style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+          <span className="text-xs" style={{ color: isUser ? 'var(--text-muted)' : 'var(--gold)', letterSpacing: '0.05em' }}>
+            {isUser ? '你' : 'AI'} · {content.length} 字符
           </span>
-        )}
+          <button onClick={onClose}
+            className="w-6 h-6 flex items-center justify-center rounded hover:opacity-70 transition-opacity"
+            style={{ color: 'var(--text-muted)' }}>
+            ✕
+          </button>
+        </div>
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto px-5 py-4"
+          style={{
+            color: 'var(--text-primary)',
+            fontFamily: '"DM Sans", sans-serif',
+            fontSize: '13px',
+            lineHeight: '1.8',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          }}>
+          {content}
+        </div>
       </div>
     </div>
   )

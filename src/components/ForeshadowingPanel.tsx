@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { ForeshadowingItem, ForwardForeshadowingReport } from '../types'
+import { genId } from '../api'
+import { dlog } from '../debugLog'
 
 interface Props {
   nodeId: string
@@ -12,7 +14,6 @@ export default function ForeshadowingPanel({ nodeId }: Props) {
   const [adding, setAdding] = useState(false)
   const [newSecret, setNewSecret] = useState('')
   const [newPlantNote, setNewPlantNote] = useState('')
-  const [editingId, setEditingId] = useState<string | null>(null)
 
   if (!node) return null
 
@@ -118,8 +119,7 @@ export default function ForeshadowingPanel({ nodeId }: Props) {
           <ForeshadowingCard
             key={f.id}
             item={f}
-            editingId={editingId}
-            setEditingId={setEditingId}
+            nodeId={nodeId}
             onUpdate={(id, data) => updateForeshadowing(nodeId, id, data)}
             onRemove={(id) => removeForeshadowing(nodeId, id)}
           />
@@ -137,8 +137,7 @@ export default function ForeshadowingPanel({ nodeId }: Props) {
               <ForeshadowingCard
                 key={f.id}
                 item={f}
-                editingId={editingId}
-                setEditingId={setEditingId}
+                nodeId={nodeId}
                 onUpdate={(id, data) => updateForeshadowing(nodeId, id, data)}
                 onRemove={(id) => removeForeshadowing(nodeId, id)}
               />
@@ -152,123 +151,424 @@ export default function ForeshadowingPanel({ nodeId }: Props) {
 
 function ForeshadowingCard({
   item,
-  editingId,
-  setEditingId,
+  nodeId,
   onUpdate,
   onRemove,
 }: {
   item: ForeshadowingItem
-  editingId: string | null
-  setEditingId: (id: string | null) => void
+  nodeId: string
   onUpdate: (id: string, data: Partial<ForeshadowingItem>) => void
   onRemove: (id: string) => void
 }) {
-  const isEditing = editingId === item.id
   const isCollected = item.status === 'collected'
-  const [expanded, setExpanded] = useState(false)
+  const [modalOpen, setModalOpen] = useState(false)
 
   return (
-    <div className="rounded px-2.5 py-2"
-      style={{
-        background: isCollected ? 'rgba(80,160,100,0.05)' : 'rgba(180,140,90,0.05)',
-        border: `1px solid ${isCollected ? 'rgba(80,160,100,0.2)' : 'rgba(180,140,90,0.2)'}`,
-      }}>
-      <div className="flex items-start gap-2">
-        <div className="flex-shrink-0 mt-0.5">
-          {isCollected ? (
-            <div className="w-3.5 h-3.5 rounded-full flex items-center justify-center"
-              style={{ background: 'rgba(80,160,100,0.2)' }}>
-              <svg width="7" height="7" viewBox="0 0 7 7" fill="none">
-                <path d="M1 3.5L2.8 5.5L6 1.5" stroke="#4a9060" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </div>
-          ) : (
-            <div className="w-3.5 h-3.5 rounded-full"
-              style={{ background: 'rgba(180,140,90,0.2)', border: '1px solid rgba(180,140,90,0.4)' }} />
-          )}
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 mb-0.5">
-            <span className="text-xs font-medium"
-              style={{ color: isCollected ? '#4a9060' : '#b8916a', fontFamily: 'monospace', fontSize: '10px' }}>
-              {item.id}
-            </span>
-            {isCollected && (
-              <span className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '9px' }}>
-                · 已回收
-              </span>
+    <>
+      <div className="rounded px-2.5 py-2 cursor-pointer transition-all hover:brightness-110"
+        onClick={() => setModalOpen(true)}
+        style={{
+          background: isCollected ? 'rgba(80,160,100,0.05)' : 'rgba(180,140,90,0.05)',
+          border: `1px solid ${isCollected ? 'rgba(80,160,100,0.2)' : 'rgba(180,140,90,0.2)'}`,
+        }}>
+        <div className="flex items-start gap-2">
+          <div className="flex-shrink-0 mt-0.5">
+            {isCollected ? (
+              <div className="w-3.5 h-3.5 rounded-full flex items-center justify-center"
+                style={{ background: 'rgba(80,160,100,0.2)' }}>
+                <svg width="7" height="7" viewBox="0 0 7 7" fill="none">
+                  <path d="M1 3.5L2.8 5.5L6 1.5" stroke="#4a9060" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
+            ) : (
+              <div className="w-3.5 h-3.5 rounded-full"
+                style={{ background: 'rgba(180,140,90,0.2)', border: '1px solid rgba(180,140,90,0.4)' }} />
             )}
-            <button onClick={() => setExpanded((e) => !e)}
-              className="ml-auto text-xs"
-              style={{ color: 'var(--text-muted)', fontSize: '9px', opacity: 0.6 }}>
-              {expanded ? '收起' : '展开'}
-            </button>
           </div>
-
-          {isEditing ? (
-            <div className="space-y-1.5">
-              <textarea
-                defaultValue={item.secret}
-                onBlur={(e) => onUpdate(item.id, { secret: e.target.value })}
-                rows={2}
-                className="w-full text-xs resize-none outline-none"
-                style={{ background: 'rgba(180,140,90,0.05)', border: '1px solid rgba(180,140,90,0.2)', borderRadius: '3px', padding: '4px 6px', color: 'var(--text-primary)', fontFamily: '"DM Sans", sans-serif', fontSize: '11px', lineHeight: 1.6 }}
-              />
-              <textarea
-                defaultValue={item.plantNote}
-                onBlur={(e) => onUpdate(item.id, { plantNote: e.target.value })}
-                placeholder="暗示与误导方式…"
-                rows={2}
-                className="w-full text-xs resize-none outline-none"
-                style={{ background: 'rgba(180,140,90,0.05)', border: '1px solid rgba(180,140,90,0.1)', borderRadius: '3px', padding: '4px 6px', color: 'var(--text-muted)', fontFamily: '"DM Sans", sans-serif', fontSize: '11px', lineHeight: 1.6 }}
-              />
-              <button onClick={() => setEditingId(null)}
-                className="text-xs px-2 py-0.5 rounded"
-                style={{ color: 'var(--text-muted)', border: '1px solid var(--border-subtle)', fontSize: '10px' }}>
-                完成
-              </button>
-            </div>
-          ) : (
-            <>
-              <p className="text-xs"
-                style={{ color: 'var(--text-primary)', fontSize: '11px', lineHeight: 1.6, opacity: isCollected ? 0.7 : 1, textDecoration: isCollected ? 'line-through' : 'none' }}>
-                {item.secret}
-              </p>
-              {expanded && (
-                <div className="mt-1.5 space-y-1">
-                  {item.plantNote && (
-                    <p className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '10px', lineHeight: 1.5 }}>
-                      <span style={{ color: '#b8916a', opacity: 0.7 }}>暗示与误导：</span>{item.plantNote}
-                    </p>
-                  )}
-                  {isCollected && item.revealNote && (
-                    <p className="text-xs" style={{ color: '#4a9060', fontSize: '10px', lineHeight: 1.5, opacity: 0.8 }}>
-                      揭示：{item.revealNote}
-                    </p>
-                  )}
-                </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <span className="text-xs font-medium"
+                style={{ color: isCollected ? '#4a9060' : '#b8916a', fontFamily: 'monospace', fontSize: '10px' }}>
+                {item.id}
+              </span>
+              {isCollected && (
+                <span className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '9px' }}>· 已回收</span>
               )}
-            </>
-          )}
-        </div>
-
-        {!isEditing && !isCollected && (
-          <div className="flex items-center gap-1 flex-shrink-0">
-            <button onClick={() => setEditingId(item.id)}
-              className="text-xs w-5 h-5 flex items-center justify-center rounded opacity-40 hover:opacity-80 transition-all"
-              style={{ color: '#b8916a' }}>
-              <svg width="9" height="9" viewBox="0 0 9 9" fill="none">
-                <path d="M1 7.5l1.5-1.5L6 2.5l1 1-3.5 3.5L2 8.5l-1-1zm5-5.5l1 1-.5.5-1-1 .5-.5z" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
-              </svg>
-            </button>
-            <button onClick={() => onRemove(item.id)}
-              className="text-xs w-5 h-5 flex items-center justify-center rounded opacity-30 hover:opacity-70 transition-all"
+              <span className="ml-auto text-xs" style={{ color: 'var(--gold)', fontSize: '9px', opacity: 0.6 }}>展开</span>
+            </div>
+            <p className="text-xs"
+              style={{
+                color: 'var(--text-primary)', fontSize: '11px', lineHeight: 1.6,
+                opacity: isCollected ? 0.7 : 1, textDecoration: isCollected ? 'line-through' : 'none',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+              {item.secret}
+            </p>
+          </div>
+          {!isCollected && (
+            <button onClick={(e) => { e.stopPropagation(); onRemove(item.id) }}
+              className="text-xs w-5 h-5 flex items-center justify-center rounded opacity-30 hover:opacity-70 transition-all flex-shrink-0"
               style={{ color: 'rgba(200,80,80,0.8)' }}>
               ✕
             </button>
+          )}
+        </div>
+      </div>
+
+      {modalOpen && (
+        <ForeshadowingEditModal
+          item={item}
+          nodeId={nodeId}
+          onUpdate={onUpdate}
+          onClose={() => setModalOpen(false)}
+        />
+      )}
+    </>
+  )
+}
+
+// ── Foreshadowing Edit Modal (split pane: edit + AI chat) ────────────────
+
+function ForeshadowingEditModal({
+  item,
+  nodeId,
+  onUpdate,
+  onClose,
+}: {
+  item: ForeshadowingItem
+  nodeId: string
+  onUpdate: (id: string, data: Partial<ForeshadowingItem>) => void
+  onClose: () => void
+}) {
+  const { nodes, getAncestorChain, apiKey, apiUrl, apiFormat, apiModel, globalSettings, projectWritingGuide, aiWritingRules } = useStore()
+  const node = nodes[nodeId]
+  const isCollected = item.status === 'collected'
+
+  const [secret, setSecret] = useState(item.secret)
+  const [plantNote, setPlantNote] = useState(item.plantNote)
+  const [revealNote, setRevealNote] = useState(item.revealNote ?? '')
+
+  const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'assistant'; content: string }[]>([])
+  const [chatInput, setChatInput] = useState('')
+  const [generating, setGenerating] = useState(false)
+  const chatEndRef = useRef<HTMLDivElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !generating) onClose() }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [onClose, generating])
+
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [chatHistory])
+
+  const handleSave = () => {
+    onUpdate(item.id, { secret, plantNote, ...(isCollected ? { revealNote } : {}) })
+  }
+
+  // Build full context for AI so it understands the whole story
+  const buildAIContext = () => {
+    if (!node) return ''
+    const ancestors = getAncestorChain(nodeId)
+    const parts: string[] = []
+
+    // Story chain
+    const withContent = ancestors.filter(a => a.storyContent.trim())
+    if (withContent.length > 0) {
+      parts.push('# 故事上文\n' + withContent.map(a => `【${a.title}】\n${a.storyContent.trim()}`).join('\n\n'))
+    }
+    if (node.storyContent.trim()) {
+      parts.push(`# 当前节点「${node.title}」\n${node.storyContent.trim()}`)
+    }
+
+    // State card
+    if (node.stateCard.content.trim()) {
+      parts.push(`# 状态卡片\n${node.stateCard.content.trim()}`)
+    }
+
+    // Story settings
+    if (projectWritingGuide.trim()) parts.push(`# 故事设定\n${projectWritingGuide.trim()}`)
+    if (aiWritingRules.trim()) parts.push(`# AI 写作规则\n${aiWritingRules.trim()}`)
+
+    // All foreshadowings for context
+    const allF = node.foreshadowings ?? []
+    if (allF.length > 0) {
+      const fLines = allF.map(f => {
+        const marker = f.id === item.id ? ' ← 当前编辑' : ''
+        return `[${f.id}]${marker} ${f.status === 'collected' ? '(已回收)' : '(待回收)'}\n  真相：${f.secret}\n  暗示：${f.plantNote}${f.revealNote ? `\n  揭示：${f.revealNote}` : ''}`
+      })
+      parts.push(`# 所有伏笔\n${fLines.join('\n\n')}`)
+    }
+
+    return parts.join('\n\n---\n\n')
+  }
+
+  const handleAISend = async () => {
+    if (!chatInput.trim() || generating || !apiKey) return
+    const userText = chatInput.trim()
+    setChatInput('')
+
+    const newHistory = [...chatHistory, { role: 'user' as const, content: userText }]
+    setChatHistory(newHistory)
+
+    const controller = new AbortController()
+    abortRef.current = controller
+    setGenerating(true)
+
+    try {
+      const context = buildAIContext()
+      const systemPrompt = `你是伏笔设计顾问。你能看到整个故事的全貌（上文、状态卡片、所有伏笔），现在帮助作者编辑伏笔 [${item.id}]。
+
+当前伏笔内容：
+- 隐藏真相：${secret}
+- 暗示与误导：${plantNote}
+${isCollected ? `- 揭示方式：${revealNote}` : ''}
+
+作者可能要你：修改真相内容、调整暗示方式、评估可行性、提出改进建议等。
+回复要简洁具体，如果建议修改，直接给出修改后的文本。
+${globalSettings.trim() ? `\n写作规则：${globalSettings.trim()}` : ''}`
+
+      const messages = [
+        { role: 'user' as const, content: `以下是完整的故事上下文：\n\n${context}` },
+        ...newHistory,
+      ]
+
+      const base = apiUrl.replace(/\/+$/, '')
+      let reply = ''
+
+      if (apiFormat === 'anthropic') {
+        const { fetch: tauriFetch } = await import('@tauri-apps/plugin-http')
+        const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+        const resolvedBase = (() => {
+          const b = base
+          const isOfficial = b === 'https://api.anthropic.com' || b === 'http://api.anthropic.com'
+          if (isOfficial && !isTauri) return '/api/anthropic'
+          return b
+        })()
+        const fetchFn = isTauri ? tauriFetch : fetch
+        const res = await fetchFn(`${resolvedBase}/v1/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+          body: JSON.stringify({ model: apiModel, max_tokens: 1024, system: systemPrompt, messages }),
+          signal: controller.signal,
+        })
+        if (res.ok) {
+          const data = await res.json() as { content?: { text: string }[] }
+          reply = data.content?.[0]?.text ?? ''
+        }
+      } else {
+        const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+        let resolvedBase = base
+        if (!isTauri) {
+          try {
+            const u = new URL(base)
+            const hostname = u.hostname
+            const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.startsWith('10.')
+            if (isLocal) resolvedBase = `/api/local/${u.hostname}/${u.port}${u.pathname}`
+          } catch { /* keep original */ }
+        }
+        const fetchFn = isTauri ? (await import('@tauri-apps/plugin-http')).fetch : fetch
+        const res = await fetchFn(`${resolvedBase}/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({ model: apiModel, max_tokens: 1024, messages: [{ role: 'system', content: systemPrompt }, ...messages] }),
+          signal: controller.signal,
+        })
+        if (res.ok) {
+          const data = await res.json() as { choices?: { message: { content?: string } }[] }
+          reply = data.choices?.[0]?.message?.content ?? ''
+        }
+      }
+
+      if (reply && !controller.signal.aborted) {
+        setChatHistory(prev => [...prev, { role: 'assistant', content: reply }])
+      }
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') {
+        dlog.warn('foreshadowing-modal', `AI error: ${(e as Error).message}`)
+        setChatHistory(prev => [...prev, { role: 'assistant', content: `出错：${(e as Error).message}` }])
+      }
+    }
+    setGenerating(false)
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: 'rgba(10,9,18,0.7)' }}
+      onClick={() => !generating && onClose()}>
+      <div
+        className="flex flex-col rounded-lg overflow-hidden"
+        style={{
+          width: 'min(900px, 92vw)',
+          height: 'min(600px, 85vh)',
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border-gold)',
+          boxShadow: '0 24px 60px rgba(0,0,0,0.5)',
+        }}
+        onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3 flex-shrink-0"
+          style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+          <div className="flex items-center gap-2">
+            <span className="font-medium" style={{ color: isCollected ? '#4a9060' : '#b8916a', fontFamily: 'monospace', fontSize: '12px' }}>
+              {item.id}
+            </span>
+            <span className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
+              {isCollected ? '已回收' : '待回收'}
+            </span>
           </div>
-        )}
+          <div className="flex items-center gap-2">
+            <button onClick={() => { handleSave(); onClose() }}
+              className="text-xs px-3 py-1 rounded transition-all hover:brightness-110"
+              style={{ background: 'rgba(180,140,90,0.2)', color: '#b8916a', border: '1px solid rgba(180,140,90,0.3)', fontSize: '11px' }}>
+              保存关闭
+            </button>
+            <button onClick={() => !generating && onClose()}
+              className="w-6 h-6 flex items-center justify-center rounded hover:opacity-70 transition-opacity"
+              style={{ color: 'var(--text-muted)' }}>
+              ✕
+            </button>
+          </div>
+        </div>
+
+        {/* Split pane */}
+        <div className="flex-1 flex min-h-0">
+          {/* Left: Edit pane */}
+          <div className="flex-1 flex flex-col overflow-y-auto px-5 py-4 min-w-0"
+            style={{ borderRight: '1px solid var(--border-subtle)' }}>
+            <label className="text-xs mb-1.5" style={{ color: '#b8916a', fontSize: '10px', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              隐藏真相
+            </label>
+            <textarea
+              value={secret}
+              onChange={(e) => { setSecret(e.target.value); onUpdate(item.id, { secret: e.target.value }) }}
+              rows={4}
+              className="w-full text-sm resize-none outline-none rounded p-3 mb-4"
+              style={{
+                background: 'var(--bg-elevated)', border: '1px solid rgba(180,140,90,0.2)',
+                color: 'var(--text-primary)', fontFamily: '"DM Sans", sans-serif', lineHeight: '1.7', fontSize: '13px',
+              }}
+            />
+
+            <label className="text-xs mb-1.5" style={{ color: '#b8916a', fontSize: '10px', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              暗示与误导
+            </label>
+            <textarea
+              value={plantNote}
+              onChange={(e) => { setPlantNote(e.target.value); onUpdate(item.id, { plantNote: e.target.value }) }}
+              placeholder="如何在故事中暗示真相，同时让读者往相反方向理解…"
+              rows={4}
+              className="w-full text-sm resize-none outline-none rounded p-3 mb-4"
+              style={{
+                background: 'var(--bg-elevated)', border: '1px solid rgba(180,140,90,0.15)',
+                color: 'var(--text-primary)', fontFamily: '"DM Sans", sans-serif', lineHeight: '1.7', fontSize: '13px',
+              }}
+            />
+
+            {isCollected && (
+              <>
+                <label className="text-xs mb-1.5" style={{ color: '#4a9060', fontSize: '10px', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                  揭示方式
+                </label>
+                <textarea
+                  value={revealNote}
+                  onChange={(e) => { setRevealNote(e.target.value); onUpdate(item.id, { revealNote: e.target.value }) }}
+                  rows={3}
+                  className="w-full text-sm resize-none outline-none rounded p-3"
+                  style={{
+                    background: 'var(--bg-elevated)', border: '1px solid rgba(80,160,100,0.2)',
+                    color: 'var(--text-primary)', fontFamily: '"DM Sans", sans-serif', lineHeight: '1.7', fontSize: '13px',
+                  }}
+                />
+              </>
+            )}
+          </div>
+
+          {/* Right: AI chat pane */}
+          <div className="flex flex-col min-w-0" style={{ width: '340px', flexShrink: 0 }}>
+            {/* Chat header */}
+            <div className="flex items-center px-4 py-2 flex-shrink-0" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+              <span className="text-xs" style={{ color: 'var(--gold)', fontSize: '10px', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                AI 辅助编辑
+              </span>
+              <span className="ml-2 text-xs" style={{ color: 'var(--text-muted)', fontSize: '9px', opacity: 0.5 }}>
+                纵览全局
+              </span>
+            </div>
+
+            {/* Chat messages */}
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5">
+              {chatHistory.length === 0 && (
+                <div className="text-center py-6" style={{ color: 'var(--text-muted)', fontSize: '11px', opacity: 0.5, lineHeight: 1.8 }}>
+                  AI 能看到完整故事上下文
+                  <br />
+                  <span style={{ fontSize: '10px' }}>
+                    试试：「这条伏笔合理吗？」
+                    <br />
+                    「帮我改进暗示方式」
+                  </span>
+                </div>
+              )}
+              {chatHistory.map((msg, i) => (
+                <div key={i}>
+                  <div className="text-xs mb-0.5" style={{ color: msg.role === 'user' ? 'var(--text-muted)' : 'var(--gold-dim)', fontSize: '9px' }}>
+                    {msg.role === 'user' ? '你' : 'AI'}
+                  </div>
+                  <div className="text-xs rounded px-2.5 py-2"
+                    style={{
+                      background: msg.role === 'user' ? 'rgba(240,235,224,0.06)' : 'rgba(201,169,110,0.05)',
+                      border: `1px solid ${msg.role === 'user' ? 'rgba(240,235,224,0.08)' : 'var(--border-gold)'}`,
+                      color: 'var(--text-primary)', fontSize: '12px', lineHeight: 1.65, whiteSpace: 'pre-wrap',
+                    }}>
+                    {msg.content}
+                  </div>
+                </div>
+              ))}
+              {generating && (
+                <div className="flex items-center gap-2 text-xs px-2.5 py-2 rounded"
+                  style={{ background: 'rgba(201,169,110,0.05)', border: '1px solid var(--border-gold)', color: 'var(--text-muted)', fontSize: '11px' }}>
+                  <span className="inline-block w-1.5 h-1.5 rounded-full generating-pulse" style={{ background: 'var(--gold)', flexShrink: 0 }} />
+                  思考中…
+                </div>
+              )}
+              <div ref={chatEndRef} />
+            </div>
+
+            {/* Chat input */}
+            <div className="flex-shrink-0 px-4 pb-3 pt-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+              {!apiKey && (
+                <p className="text-xs text-center mb-1.5" style={{ color: 'rgba(200,80,80,0.7)', fontSize: '10px' }}>
+                  请先配置 API Key
+                </p>
+              )}
+              <div className="flex gap-1.5 items-end rounded"
+                style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', padding: '6px 8px' }}>
+                <textarea
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAISend() } }}
+                  disabled={generating || !apiKey}
+                  placeholder={generating ? '生成中…' : '输入指令…'}
+                  rows={1}
+                  className="flex-1 resize-none outline-none text-xs"
+                  style={{ background: 'transparent', color: 'var(--text-primary)', fontSize: '12px', lineHeight: 1.5 }}
+                />
+                <button onClick={handleAISend} disabled={generating || !apiKey || !chatInput.trim()}
+                  className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded transition-all"
+                  style={{
+                    background: generating || !apiKey || !chatInput.trim() ? 'rgba(201,169,110,0.15)' : 'var(--gold)',
+                    opacity: generating || !apiKey || !chatInput.trim() ? 0.5 : 1,
+                  }}>
+                  <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+                    <path d="M2 10L6 2L10 10L6 8L2 10Z"
+                      fill={generating || !apiKey || !chatInput.trim() ? 'var(--gold)' : '#0e0d15'} />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )
