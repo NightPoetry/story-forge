@@ -60,6 +60,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     collectForeshadowing, addForeshadowing, pushUndoSnapshot,
     soundEnabled, setSoundEnabled,
     updateForwardForeshadowing, setAiWritingRules,
+    undo, undoStack,
   } = useStore()
 
   const node = nodes[nodeId]
@@ -372,6 +373,14 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
               className="text-xs px-2 py-1 rounded"
               style={{ color: '#e06060', border: '1px solid rgba(200,80,80,0.3)', fontSize: '10px' }}>
               停止
+            </button>
+          )}
+          {!isGenerating && undoStack.length > 0 && (
+            <button onClick={undo}
+              title="撤销上次 AI 生成 (Ctrl+Z)"
+              className="text-xs px-2 py-1 rounded transition-all hover:opacity-80"
+              style={{ color: 'var(--text-muted)', border: '1px solid var(--border-subtle)', fontSize: '10px' }}>
+              撤销
             </button>
           )}
           <button
