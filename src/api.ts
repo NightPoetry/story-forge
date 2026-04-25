@@ -33,8 +33,16 @@ function resolveAnthropicBase(apiUrl: string): string {
 }
 
 // Normalize OpenAI-compatible base URL: user supplies the versioned endpoint (e.g. /v1)
+// In browser dev mode, local network URLs are proxied through Vite to avoid CORS.
 function resolveOpenAIBase(apiUrl: string): string {
-  return apiUrl.replace(/\/+$/, '')
+  const base = apiUrl.replace(/\/+$/, '')
+  if (!isTauri() && isLocalUrl(base)) {
+    try {
+      const u = new URL(base)
+      return `/api/local/${u.hostname}/${u.port}${u.pathname}`
+    } catch { /* fall through */ }
+  }
+  return base
 }
 
 // ── Prompt builders ────────────────────────────────────────────────────────
@@ -369,7 +377,7 @@ async function doStreamFetch(
   body: string,
   signal?: AbortSignal,
 ): Promise<Response> {
-  if (isTauri() && !isLocalUrl(url)) {
+  if (isTauri()) {
     dlog.info('fetch', `using tauri-http for: ${url}`)
     try {
       const res = await tauriFetch(url, { method: 'POST', headers, signal, body })
@@ -385,6 +393,21 @@ async function doStreamFetch(
     dlog.info('fetch', `using native fetch (non-Tauri): ${url}`)
   }
   return await fetch(url, { method: 'POST', headers, signal, body })
+}
+
+async function doFetch(
+  url: string,
+  init: RequestInit,
+): Promise<Response> {
+  if (isTauri()) {
+    try {
+      return await tauriFetch(url, init)
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') throw e
+      console.warn('[tauri-http] falling back to native fetch:', e)
+    }
+  }
+  return await fetch(url, init)
 }
 
 const yieldToPaint = () => new Promise<void>(r => setTimeout(r, 0))
@@ -1089,7 +1112,7 @@ export async function streamGeneration(
     const base = resolveAnthropicBase(cfg.apiUrl)
     let res: Response
     try {
-      res = await fetch(`${base}/v1/messages`, {
+      res = await doFetch(`${base}/v1/messages`, {
         method: 'POST',
         headers: anthropicHeaders(cfg.apiKey),
         body: JSON.stringify({
@@ -1137,7 +1160,7 @@ export async function streamGeneration(
     const base = cfg.apiUrl.replace(/\/$/, '')
     let res: Response
     try {
-      res = await fetch(`${base}/chat/completions`, {
+      res = await doFetch(`${base}/chat/completions`, {
         method: 'POST',
         headers: openaiHeaders(cfg.apiKey),
         body: JSON.stringify({
