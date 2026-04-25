@@ -653,20 +653,19 @@ ${globalSettings.trim() ? `\n写作规则：${globalSettings.trim()}` : ''}`
                   请先配置 API Key
                 </p>
               )}
-              <div className="flex gap-1.5 items-end rounded"
-                style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', padding: '6px 8px' }}>
+              <div className="flex gap-1.5 items-end">
                 <textarea
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAISend() } }}
                   disabled={generating || !apiKey}
-                  placeholder={generating ? '生成中…' : '输入指令…'}
-                  rows={1}
-                  className="flex-1 resize-none outline-none text-xs"
-                  style={{ background: 'transparent', color: 'var(--text-primary)', fontSize: '12px', lineHeight: 1.5 }}
+                  placeholder={generating ? '生成中…' : '输入指令，回车发送…'}
+                  rows={3}
+                  className="flex-1 resize-none outline-none text-xs rounded p-2.5"
+                  style={{ background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: '12px', lineHeight: 1.6 }}
                 />
                 <button onClick={handleAISend} disabled={generating || !apiKey || !chatInput.trim()}
-                  className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded transition-all"
+                  className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded transition-all mb-0.5"
                   style={{
                     background: generating || !apiKey || !chatInput.trim() ? 'rgba(201,169,110,0.15)' : 'var(--gold)',
                     opacity: generating || !apiKey || !chatInput.trim() ? 0.5 : 1,
