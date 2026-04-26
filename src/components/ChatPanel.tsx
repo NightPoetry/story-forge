@@ -22,6 +22,20 @@ function resizeTextarea(el: HTMLTextAreaElement) {
   if (scroller) scroller.scrollTop = scrollTop
 }
 
+function isDuplicateForeshadowing(
+  newSecret: string,
+  existing: { secret: string }[],
+): boolean {
+  const normalize = (s: string) => s.replace(/\s+/g, '').toLowerCase()
+  const ns = normalize(newSecret)
+  for (const e of existing) {
+    const es = normalize(e.secret)
+    if (ns === es) return true
+    if (ns.length > 10 && es.length > 10 && (ns.includes(es) || es.includes(ns))) return true
+  }
+  return false
+}
+
 const TOOL_LABELS: Record<string, string> = {
   __reasoning__: '思考中…',
   write_story: '编写中…',
@@ -141,7 +155,12 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
             id: genId(), role: 'assistant', content: action.content, timestamp: Date.now(),
           })
         } else if (action.type === 'add_foreshadowings') {
-          for (const item of action.items) addForeshadowing(nodeId, item.secret, item.plantNote)
+          const currentForeshadowings = useStore.getState().nodes[nodeId]?.foreshadowings ?? []
+          for (const item of action.items) {
+            if (!isDuplicateForeshadowing(item.secret, currentForeshadowings)) {
+              addForeshadowing(nodeId, item.secret, item.plantNote)
+            }
+          }
         } else if (action.type === 'collect_foreshadowing') {
           collectForeshadowing(nodeId, action.id, action.revealNote)
         } else if (action.type === 'report_forward_foreshadowing') {
@@ -172,7 +191,12 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
                 if (controller.signal.aborted) return
                 if (action.type === 'update_writing_rules') setAiWritingRules(action.content)
                 else if (action.type === 'add_foreshadowings') {
-                  for (const item of action.items) addForeshadowing(nodeId, item.secret, item.plantNote)
+                  const curFs = useStore.getState().nodes[nodeId]?.foreshadowings ?? []
+                  for (const item of action.items) {
+                    if (!isDuplicateForeshadowing(item.secret, curFs)) {
+                      addForeshadowing(nodeId, item.secret, item.plantNote)
+                    }
+                  }
                 }
               },
               (toolName) => { if (!controller.signal.aborted) setStage(TOOL_LABELS[toolName] ?? '正在初始化…') },
