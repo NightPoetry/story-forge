@@ -78,7 +78,7 @@ export function buildDynamicContext(
   const planted = foreshadowings.filter((f) => f.status === 'planted')
   const collected = foreshadowings.filter((f) => f.status === 'collected')
   if (foreshadowings.length > 0) {
-    const lines: string[] = ['# 逆伏笔档案（作者机密——绝不直接透露给读者）']
+    const lines: string[] = ['# 逆伏笔档案（作者机密——绝不直接透露给读者）\n> 以下伏笔已存档，add_foreshadowings 只能追加全新伏笔，不得重复或覆盖已有条目。']
     if (planted.length > 0) {
       lines.push('\n## 待回收（刻意隐藏的真相。写作时通过暗示和误导让读者与主角一同被欺骗——暗示要有，但必须用剧情歪曲其含义，让人完全往相反方向理解。绝不得直接揭示）')
       for (const f of planted) {
@@ -201,17 +201,17 @@ const COLLECT_FORESHADOWING_TOOL = {
 const ADD_FORESHADOWING_TOOL = {
   name: 'add_foreshadowings',
   description:
-    '批量添加逆伏笔（1-5条）。当用户要求创建伏笔、设计隐藏真相，或当伏笔档案为空且故事已有足够设定时，主动为故事设计伏笔。一次调用可添加多条。',
+    '仅添加新伏笔（1-5条），不会替换或修改已有伏笔。伏笔档案中已有的伏笔会被保留，此工具只追加新条目。调用前必须检查上方"逆伏笔档案"中已有的伏笔，确保新伏笔不与已有伏笔重复或语义相似。当用户要求创建伏笔、设计隐藏真相，或当伏笔档案为空且故事已有足够设定时调用。',
   input_schema: {
     type: 'object' as const,
     properties: {
       items: {
         type: 'array',
-        description: '要添加的伏笔列表',
+        description: '要新增的伏笔列表（仅填写全新的伏笔，不要包含伏笔档案中已有的内容）',
         items: {
           type: 'object',
           properties: {
-            secret: { type: 'string', description: '隐藏的真相——只有作者知道的秘密，读者和主角都被蒙在鼓里' },
+            secret: { type: 'string', description: '隐藏的真相——只有作者知道的秘密，读者和主角都被蒙在鼓里。不得与伏笔档案中已有伏笔的隐藏真相重复或近似' },
             plant_note: { type: 'string', description: '如何在故事中暗示并误导：要植入什么线索，以及如何歪曲其含义让读者往相反方向理解' },
           },
           required: ['secret', 'plant_note'],
@@ -283,12 +283,12 @@ const TOOL_GUIDANCE = `你是专业故事创作助手。根据用户指令，调
   - 调用 write_story 后**必须**调用 report_forward_foreshadowing，报告用了哪些上文细节、还有哪些可用的候选细节。
 - 用户要求建立设定、世界观、人物背景，或故事出现重要变化 → 调用 update_state_card
 - 用户要求修改写作风格、叙事规则、文风约定等写作层面的规则 → 调用 update_writing_rules
-- 用户要求创建伏笔、设计隐藏真相 → 调用 add_foreshadowings（一次可添加多条）
+- 用户要求创建伏笔、设计隐藏真相 → 调用 add_foreshadowings（一次可添加多条）。**重要：此工具仅添加新伏笔，已有伏笔会自动保留。先检查伏笔档案，只添加与已有伏笔不重复的全新伏笔。**
 - 故事情节自然发展到揭示某伏笔的合适时机 → 调用 collect_foreshadowing（仅当伏笔档案有待回收项时可用）
 - 【自动初始化】如果上方提示某些内容为空，在完成用户主要请求的同时，主动调用对应工具填充合理的初始内容：
   - 状态卡片为空 → 根据已知信息调用 update_state_card 初始化
   - AI 写作规则为空 → 根据故事类型和风格调用 update_writing_rules 生成适合的写作规则
-  - 伏笔档案为空且故事已有基础设定 → 调用 add_foreshadowings 设计 2-3 条伏笔
+  - 伏笔档案为空且故事已有基础设定 → 调用 add_foreshadowings 设计 2-3 条全新伏笔（不与已有伏笔重复）
 - 可同时调用多个工具
 - 每次响应必须调用 chat_reply 向用户简短说明操作（不要复述正文）`
 
