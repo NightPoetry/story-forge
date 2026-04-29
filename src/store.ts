@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { ApiFormat, BranchType, ChatMessage, ForeshadowingItem, ForwardForeshadowingReport, FullProjectData, RevisionPoint, RevisionSnapshot, StateCardData, StoryNodeData, ToolStreamMode, TrashedNodeGroup } from './types'
+import { ApiFormat, BranchType, CharacterCard, CharacterEvent, ChatMessage, ForeshadowingItem, ForwardForeshadowingReport, FullProjectData, RevisionPoint, RevisionSnapshot, StateCardData, StoryNodeData, ToolStreamMode, TrashedNodeGroup } from './types'
 import { genId } from './api'
 
 function makeNode(
@@ -37,6 +37,7 @@ interface AppStore {
   aiWritingRules: string
   writingGuideChatHistory: ChatMessage[]
   trashedNodes: TrashedNodeGroup[]
+  characterCards: CharacterCard[]
 
   // Undo/redo (ephemeral, not persisted)
   undoStack: { nodes: Record<string, StoryNodeData>; rootNodeId: string | null; trashedNodes: TrashedNodeGroup[] }[]
@@ -61,7 +62,7 @@ interface AppStore {
   toolStreamMode: ToolStreamMode
 
   // Story actions
-  resetWithProjectData: (nodes: Record<string, StoryNodeData>, rootNodeId: string | null, writingGuide?: string, aiWritingRules?: string, writingGuideChatHistory?: ChatMessage[], trashedNodes?: TrashedNodeGroup[]) => void
+  resetWithProjectData: (nodes: Record<string, StoryNodeData>, rootNodeId: string | null, writingGuide?: string, aiWritingRules?: string, writingGuideChatHistory?: ChatMessage[], trashedNodes?: TrashedNodeGroup[], characterCards?: CharacterCard[]) => void
   initRootNode: () => void
   continueNode: (nodeId: string) => string
   branchNode: (nodeId: string) => string
@@ -82,6 +83,13 @@ interface AppStore {
 
   // Forward foreshadowing
   updateForwardForeshadowing: (nodeId: string, report: ForwardForeshadowingReport) => void
+
+  // Character cards
+  addCharacterCard: (name: string) => string
+  updateCharacterCard: (id: string, data: Partial<Omit<CharacterCard, 'id' | 'events' | 'createdAt'>>) => void
+  removeCharacterCard: (id: string) => void
+  addCharacterEvent: (charId: string, event: Omit<CharacterEvent, 'id' | 'timestamp'>) => void
+  removeCharacterEvent: (charId: string, eventId: string) => void
 
   // Revision actions
   addRevisionPoint: (nodeId: string, originalText: string, newText: string, anchorBefore: string, anchorAfter: string, source: 'manual' | 'ai') => string
@@ -116,7 +124,7 @@ interface AppStore {
   // Helpers
   getAncestorChain: (nodeId: string) => StoryNodeData[]
   getChildren: (nodeId: string) => StoryNodeData[]
-  getProjectSnapshot: () => Pick<FullProjectData, 'nodes' | 'rootNodeId' | 'writingGuide' | 'aiWritingRules' | 'writingGuideChatHistory' | 'trashedNodes'>
+  getProjectSnapshot: () => Pick<FullProjectData, 'nodes' | 'rootNodeId' | 'writingGuide' | 'aiWritingRules' | 'writingGuideChatHistory' | 'trashedNodes' | 'characterCards'>
 }
 
 export const useStore = create<AppStore>()(
@@ -132,6 +140,7 @@ export const useStore = create<AppStore>()(
       aiWritingRules: '',
       writingGuideChatHistory: [],
       trashedNodes: [],
+      characterCards: [],
       undoStack: [],
       redoStack: [],
       autoSave: true,
@@ -151,8 +160,8 @@ export const useStore = create<AppStore>()(
       soundEnabled: true,
       toolStreamMode: 'streaming' as ToolStreamMode,
 
-      resetWithProjectData: (nodes, rootNodeId, writingGuide = '', aiWritingRules = '', writingGuideChatHistory = [], trashedNodes = []) =>
-        set({ nodes, rootNodeId, selectedNodeId: rootNodeId, editingNodeId: null, isGenerating: false, projectWritingGuide: writingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes, undoStack: [], redoStack: [] }),
+      resetWithProjectData: (nodes, rootNodeId, writingGuide = '', aiWritingRules = '', writingGuideChatHistory = [], trashedNodes = [], characterCards = []) =>
+        set({ nodes, rootNodeId, selectedNodeId: rootNodeId, editingNodeId: null, isGenerating: false, projectWritingGuide: writingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes, characterCards, undoStack: [], redoStack: [] }),
 
       initRootNode: () => {
         if (get().rootNodeId && get().nodes[get().rootNodeId!]) return
@@ -306,6 +315,25 @@ export const useStore = create<AppStore>()(
             [nodeId]: { ...s.nodes[nodeId], forwardForeshadowing: report },
           },
         })),
+
+      // Character cards
+      addCharacterCard: (name) => {
+        const id = genId()
+        const now = Date.now()
+        const card: CharacterCard = { id, name, baseInfo: '', speechStyle: '', personality: '', events: [], createdAt: now, updatedAt: now }
+        set((s) => ({ characterCards: [...s.characterCards, card] }))
+        return id
+      },
+      updateCharacterCard: (id, data) =>
+        set((s) => ({ characterCards: s.characterCards.map((c) => c.id === id ? { ...c, ...data, updatedAt: Date.now() } : c) })),
+      removeCharacterCard: (id) =>
+        set((s) => ({ characterCards: s.characterCards.filter((c) => c.id !== id) })),
+      addCharacterEvent: (charId, event) => {
+        const ev: CharacterEvent = { ...event, id: genId(), timestamp: Date.now() }
+        set((s) => ({ characterCards: s.characterCards.map((c) => c.id === charId ? { ...c, events: [...c.events, ev], updatedAt: Date.now() } : c) }))
+      },
+      removeCharacterEvent: (charId, eventId) =>
+        set((s) => ({ characterCards: s.characterCards.map((c) => c.id === charId ? { ...c, events: c.events.filter((e) => e.id !== eventId), updatedAt: Date.now() } : c) })),
 
       addRevisionPoint: (nodeId, originalText, newText, anchorBefore, anchorAfter, source) => {
         const node = get().nodes[nodeId]
@@ -470,6 +498,7 @@ export const useStore = create<AppStore>()(
         aiWritingRules: get().aiWritingRules,
         writingGuideChatHistory: get().writingGuideChatHistory,
         trashedNodes: get().trashedNodes,
+        characterCards: get().characterCards,
       }),
     }),
     {

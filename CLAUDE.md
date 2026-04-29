@@ -16,6 +16,13 @@ npm run tauri:build  # Tauri release build (macOS/Windows binary)
 
 No test suite is configured. TypeScript strict mode is enabled — `npm run build` is the primary correctness check.
 
+## Build & Release Rules
+
+- **Packaging filenames must include the version number.** Tauri's `tauri.conf.json` controls the DMG name via `productName` + `version`. Before each release build, ensure `version` is updated in all three places: `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`.
+- **Never overwrite a previous build.** Before building a new version, rename the existing DMG (e.g., append `_old`) to preserve it.
+- After `npm run tauri:build`, the output DMG is at `src-tauri/target/release/bundle/dmg/`.
+- After writing any file that contains Chinese text, run `grep -rn $'\xef\xbf\xbd'` on modified files to detect UTF-8 truncation (garbled characters). Fix before proceeding.
+
 ## Architecture
 
 **Tauri 2 desktop app** with React 18 + TypeScript frontend. The Rust backend is minimal (shell, fs, dialog plugins only); all application logic lives in TypeScript.

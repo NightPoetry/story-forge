@@ -97,6 +97,27 @@ export interface StoryNodeData {
   forwardForeshadowing?: ForwardForeshadowingReport
 }
 
+// ── Character Cards ──────────────────────────────────────────────────────
+
+export interface CharacterEvent {
+  id: string
+  nodeTitle: string
+  description: string
+  changes: string
+  timestamp: number
+}
+
+export interface CharacterCard {
+  id: string
+  name: string
+  baseInfo: string
+  speechStyle: string
+  personality: string
+  events: CharacterEvent[]
+  createdAt: number
+  updatedAt: number
+}
+
 // ── Project types ──────────────────────────────────────────────────────────
 
 export interface ProjectMeta {
@@ -119,6 +140,7 @@ export interface FullProjectData {
   aiWritingRules?: string
   writingGuideChatHistory?: ChatMessage[]
   trashedNodes?: TrashedNodeGroup[]
+  characterCards?: CharacterCard[]
   // Legacy fields kept for reading old saves
   foreshadowings?: ForeshadowingItem[]
   foreshadowingCounter?: number

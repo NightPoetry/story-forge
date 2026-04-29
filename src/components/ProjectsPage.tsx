@@ -60,9 +60,9 @@ export default function ProjectsPage() {
           foreshadowingCounter: node.foreshadowingCounter ?? (nid === data.rootNodeId ? (data.foreshadowingCounter ?? 0) : 0),
         }])
       )
-      resetWithProjectData(migratedNodes, data.rootNodeId, data.writingGuide ?? '', data.aiWritingRules ?? '', data.writingGuideChatHistory ?? [], data.trashedNodes ?? [])
+      resetWithProjectData(migratedNodes, data.rootNodeId, data.writingGuide ?? '', data.aiWritingRules ?? '', data.writingGuideChatHistory ?? [], data.trashedNodes ?? [], data.characterCards ?? [])
     } else {
-      resetWithProjectData({}, null, '', '', [], [])
+      resetWithProjectData({}, null, '', '', [], [], [])
       initRootNode()
     }
     setUnlocking(null)

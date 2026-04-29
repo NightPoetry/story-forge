@@ -4,7 +4,7 @@ import { useProjectStore } from './projectStore'
 import { ApiFormat, ApiCheckResult } from './types'
 import { checkApiConfig } from './api'
 import Toolbar from './components/Toolbar'
-import GlobalSettings from './components/GlobalSettings'
+import WritingRulesPanel from './components/WritingRulesPanel'
 import NodeGraph from './components/NodeGraph'
 import NodeEditor from './components/NodeEditor'
 import ProjectsPage from './components/ProjectsPage'
@@ -21,7 +21,7 @@ export default function App() {
     setApiKey, setApiUrl, setApiFormat, setApiModel, setToolStreamMode,
     nodes, rootNodeId, editingNodeId,
     projectWritingGuide, aiWritingRules, writingGuideChatHistory,
-    trashedNodes, autoSave, undo, redo,
+    trashedNodes, characterCards, autoSave, undo, redo,
   } = useStore()
 
   const { init, view, currentProjectId, saveProjectData, closeProject } = useProjectStore()
@@ -48,29 +48,29 @@ export default function App() {
     if (!autoSave) return
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(async () => {
-      await saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes)
+      await saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes, characterCards)
       setIsDirty(false)
     }, 1500)
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current) }
-  }, [nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes, currentProjectId, autoSave])
+  }, [nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes, characterCards, currentProjectId, autoSave])
 
   // Manual save
   const handleManualSave = useCallback(async () => {
     if (!currentProjectId) return
     if (saveTimer.current) clearTimeout(saveTimer.current)
-    await saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes)
+    await saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes, characterCards)
     setIsDirty(false)
-  }, [currentProjectId, nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes])
+  }, [currentProjectId, nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes, characterCards])
 
   // Back to projects
   const handleBack = useCallback(async () => {
     if (currentProjectId) {
       if (saveTimer.current) clearTimeout(saveTimer.current)
-      await saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes)
+      await saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes, characterCards)
       setIsDirty(false)
     }
     await closeProject()
-  }, [currentProjectId, nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes])
+  }, [currentProjectId, nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes, characterCards])
 
   // Keyboard shortcuts: Ctrl+S, Ctrl+Z, Ctrl+R, Ctrl+Shift+Z
   useEffect(() => {
@@ -147,7 +147,7 @@ export default function App() {
           <div className="flex-1 relative overflow-hidden">
             <NodeGraph />
             {editingNodeId && <NodeEditor key={editingNodeId} nodeId={editingNodeId} isDirty={isDirty} onManualSave={handleManualSave} />}
-            <GlobalSettings />
+            <WritingRulesPanel />
             {showNodeTrash && <NodeTrashPanel onClose={() => setShowNodeTrash(false)} />}
 
             {/* Floating trash button — bottom-right, gold circle */}
