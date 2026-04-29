@@ -1,4 +1,4 @@
-import { ApiFormat, ApiCheckResult, ChatMessage, StoryNodeData } from './types'
+import { ApiFormat, ApiCheckResult, CharacterCard, ChatMessage, StoryNodeData } from './types'
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 
 export const genId = () =>
@@ -56,25 +56,36 @@ export function buildFixedSystemPrompt(writingRules: string): string {
 // Dynamic part — prepended to the user's message each request.
 // Contains story context, foreshadowings, story settings, state card, and tool guidance.
 // State card explicitly overrides story settings when they conflict.
+export interface ContextToggles {
+  includeAncestors: boolean
+  includeStateCard: boolean
+  includeForeshadowings: boolean
+}
+
 export function buildDynamicContext(
   node: StoryNodeData,
   ancestors: StoryNodeData[],
   storySettings: string,
   aiWritingRules?: string,
+  toggles?: ContextToggles,
+  characterCards?: CharacterCard[],
 ): string {
+  const t = toggles ?? { includeAncestors: true, includeStateCard: true, includeForeshadowings: true }
   const parts: string[] = []
 
   // 故事上文
-  const withContent = ancestors.filter((a) => a.storyContent.trim())
-  if (withContent.length > 0) {
-    const ctx = withContent
-      .map((a) => `【${a.title}】\n${a.storyContent.trim()}`)
-      .join('\n\n')
-    parts.push(`# 故事上文\n${ctx}`)
+  if (t.includeAncestors) {
+    const withContent = ancestors.filter((a) => a.storyContent.trim())
+    if (withContent.length > 0) {
+      const ctx = withContent
+        .map((a) => `【${a.title}】\n${a.storyContent.trim()}`)
+        .join('\n\n')
+      parts.push(`# 故事上文\n${ctx}`)
+    }
   }
 
   // 伏笔档案
-  const foreshadowings = node.foreshadowings ?? []
+  const foreshadowings = t.includeForeshadowings ? (node.foreshadowings ?? []) : []
   const planted = foreshadowings.filter((f) => f.status === 'planted')
   const collected = foreshadowings.filter((f) => f.status === 'collected')
   if (foreshadowings.length > 0) {
@@ -98,13 +109,31 @@ export function buildDynamicContext(
 
   // 故事设定 + 状态卡片（状态卡片优先级更高）
   const hasSettings = storySettings.trim()
-  const hasState = node.stateCard.content.trim()
+  const hasState = t.includeStateCard && node.stateCard.content.trim()
   if (hasSettings) {
     parts.push(`# 故事设定\n${storySettings.trim()}`)
   }
   if (hasState) {
     const note = hasSettings ? '（若与上方故事设定冲突，以此为准）' : ''
     parts.push(`# 派生状态卡片${note}\n${node.stateCard.content.trim()}`)
+  }
+
+  // 人物卡片
+  if (characterCards && characterCards.length > 0) {
+    const charLines = characterCards.map((c) => {
+      const lines = [`## ${c.name}`]
+      if (c.baseInfo.trim()) lines.push(`基本信息：${c.baseInfo.trim()}`)
+      if (c.personality.trim()) lines.push(`性格/脾气：${c.personality.trim()}`)
+      if (c.speechStyle.trim()) lines.push(`说话方式：${c.speechStyle.trim()}`)
+      if (c.events.length > 0) {
+        lines.push('变化记录：')
+        for (const ev of c.events) {
+          lines.push(`- [${ev.nodeTitle || '?'}] ${ev.description}${ev.changes ? ` → ${ev.changes}` : ''}`)
+        }
+      }
+      return lines.join('\n')
+    }).join('\n\n')
+    parts.push(`# 人物档案\n写作时必须严格遵循每个人物的说话方式和性格特征，如有变化记录则以最新状态为准。\n\n${charLines}`)
   }
 
   // AI 写作规则
@@ -114,9 +143,9 @@ export function buildDynamicContext(
 
   // 空内容自动初始化提示
   const emptyParts: string[] = []
-  if (!node.stateCard.content.trim()) emptyParts.push('状态卡片')
+  if (t.includeStateCard && !node.stateCard.content.trim()) emptyParts.push('状态卡片')
   if (!aiWritingRules?.trim()) emptyParts.push('AI 写作规则')
-  if (foreshadowings.length === 0) emptyParts.push('伏笔档案')
+  if (t.includeForeshadowings && foreshadowings.length === 0) emptyParts.push('伏笔档案')
   if (emptyParts.length > 0) {
     parts.push(`# 自动初始化提示\n以下内容当前为空：${emptyParts.join('、')}。如果用户的指令涉及故事创作或设定建立，请在完成主要任务的同时，主动调用对应工具进行初始化填充（伏笔需要故事有基础设定后才初始化）。`)
   }
@@ -238,6 +267,34 @@ const UPDATE_WRITING_RULES_TOOL = {
   },
 } as const
 
+const UPDATE_CHARACTERS_TOOL = {
+  name: 'update_characters',
+  description:
+    '在 write_story 之后调用，仅更新本章中**出现并发生了变化**的人物。未出现或未发生变化的人物不要包含在内。每个人物包含：name（人物名，必须与人物档案中已有名字一致；新人物则填新名字）、changes（本章中该人物发生的变化描述）。仅当有人物确实发生了性格、态度、关系、状态等方面的变化时才调用。',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      updates: {
+        type: 'array',
+        description: '本章中发生变化的人物列表',
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '人物名称' },
+            baseInfo: { type: 'string', description: '更新后的基本信息（如有变化）' },
+            personality: { type: 'string', description: '更新后的性格/脾气（如有变化）' },
+            speechStyle: { type: 'string', description: '更新后的说话方式（如有变化）' },
+            event: { type: 'string', description: '本章中发生了什么导致变化' },
+            changes: { type: 'string', description: '人物因此发生了什么改变' },
+          },
+          required: ['name', 'event', 'changes'],
+        },
+      },
+    },
+    required: ['updates'],
+  },
+} as const
+
 const REPORT_FORWARD_FORESHADOWING_TOOL = {
   name: 'report_forward_foreshadowing',
   description:
@@ -281,6 +338,7 @@ const TOOL_GUIDANCE = `你是专业故事创作助手。根据用户指令，调
   - 【正伏笔·自动】写作时主动回溯上文已有的细节（人物动作、物品、场景描写、对话中不经意提到的信息等），将其自然地编织进当前剧情以增强合理性。例如：主角陷入困境时，用上文中某个不起眼的细节帮助脱困；新的剧情转折通过前文某句话获得了伏笔式的呼应。这种"其实前面早就写过"的惊喜感是正伏笔的核心。
   - 【逆伏笔·设计】根据伏笔档案中的隐藏真相，在故事中植入暗示但必须用剧情歪曲其含义，让读者和主角一同被误导——暗示要有，但理解方向必须是错的。
   - 调用 write_story 后**必须**调用 report_forward_foreshadowing，报告用了哪些上文细节、还有哪些可用的候选细节。
+  - 调用 write_story 后，如果有人物发生了变化（性格转变、关系变化、状态变化等），**必须**调用 update_characters 记录变化。只记录本章中**确实发生了改变**的人物，未变化或未出场的不要包含。
 - 用户要求建立设定、世界观、人物背景，或故事出现重要变化 → 调用 update_state_card
 - 用户要求修改写作风格、叙事规则、文风约定等写作层面的规则 → 调用 update_writing_rules
 - 用户要求创建伏笔、设计隐藏真相 → 调用 add_foreshadowings（一次可添加多条）。**重要：此工具仅添加新伏笔，已有伏笔会自动保留。先检查伏笔档案，只添加与已有伏笔不重复的全新伏笔。**
@@ -342,6 +400,7 @@ export type AIAction =
   | { type: 'collect_foreshadowing'; id: string; revealNote: string }
   | { type: 'add_foreshadowings'; items: { secret: string; plantNote: string }[] }
   | { type: 'report_forward_foreshadowing'; used: { detail: string; source: string; usage: string }[]; candidates: { detail: string; source: string; potential: string }[] }
+  | { type: 'update_characters'; updates: { name: string; baseInfo?: string; personality?: string; speechStyle?: string; event: string; changes: string }[] }
 
 export type AIGuideAction =
   | { type: 'update_guide'; content: string }
@@ -502,16 +561,19 @@ export async function runIntelligentGeneration(
   signal?: AbortSignal,
   onStreamDelta?: (toolName: string, text: string) => void,
   toolStreamMode?: import('./types').ToolStreamMode,
+  excludeTools?: string[],
 ) {
   const fullSystem = systemPrompt
   type ToolDef = { name: string; description: string; input_schema: { type: 'object'; properties: Record<string, unknown>; required: string[] } }
+  const exclude = new Set(excludeTools ?? [])
   const tools = [
     ...STORY_TOOLS,
     UPDATE_WRITING_RULES_TOOL,
+    UPDATE_CHARACTERS_TOOL,
     ADD_FORESHADOWING_TOOL,
     REPORT_FORWARD_FORESHADOWING_TOOL,
     ...(hasActiveForeshadowings ? [COLLECT_FORESHADOWING_TOOL] : []),
-  ] as unknown as ToolDef[]
+  ].filter(t => !exclude.has(t.name)) as unknown as ToolDef[]
 
   if (cfg.apiFormat === 'anthropic') {
     await runAnthropicStreamingToolUse(
@@ -596,6 +658,10 @@ async function runAnthropicStreamingToolUse(
               if (block.name === 'write_story') onAction({ type: 'write_story', content: (input.content as string) ?? '' })
               else if (block.name === 'update_state_card') onAction({ type: 'update_state_card', content: (input.content as string) ?? '' })
               else if (block.name === 'update_writing_rules') onAction({ type: 'update_writing_rules', content: (input.content as string) ?? '' })
+              else if (block.name === 'update_characters') {
+                const updates = ((input.updates as { name: string; baseInfo?: string; personality?: string; speechStyle?: string; event: string; changes: string }[]) ?? [])
+                if (updates.length > 0) onAction({ type: 'update_characters', updates })
+              }
               else if (block.name === 'chat_reply') { onAction({ type: 'chat_reply', content: (input.message as string) ?? '' }); hasChatReply = true }
               else if (block.name === 'collect_foreshadowing') onAction({ type: 'collect_foreshadowing', id: (input.id as string) ?? '', revealNote: (input.reveal_note as string) ?? '' })
               else if (block.name === 'add_foreshadowings') {
@@ -731,6 +797,10 @@ async function runOpenAIToolUse(
       if (accum.name === 'write_story') onAction({ type: 'write_story', content: (args.content as string) ?? '' })
       else if (accum.name === 'update_state_card') onAction({ type: 'update_state_card', content: (args.content as string) ?? '' })
       else if (accum.name === 'update_writing_rules') onAction({ type: 'update_writing_rules', content: (args.content as string) ?? '' })
+      else if (accum.name === 'update_characters') {
+        const updates = ((args.updates as { name: string; baseInfo?: string; personality?: string; speechStyle?: string; event: string; changes: string }[]) ?? [])
+        if (updates.length > 0) onAction({ type: 'update_characters', updates })
+      }
       else if (accum.name === 'chat_reply') { onAction({ type: 'chat_reply', content: (args.message as string) ?? '' }); hasChatReply = true }
       else if (accum.name === 'collect_foreshadowing') onAction({ type: 'collect_foreshadowing', id: (args.id as string) ?? '', revealNote: (args.reveal_note as string) ?? '' })
       else if (accum.name === 'add_foreshadowings') {
@@ -760,59 +830,68 @@ async function runOpenAIToolUse(
 
 const PLAIN_OUTPUT_INSTRUCTIONS = `
 
-## 输出格式（严格遵守）
+## 输出格式（严格遵守，违反将导致解析失败）
 
-你没有工具可调用，请用XML标签包裹输出。可以同时输出多个标签。
+你没有工具可调用，必须用XML标签包裹所有输出。**每个标签必须正确闭合**——有 <tag> 就必须有 </tag>，缺少闭合标签会导致内容丢失。标签外的任何文字都会被丢弃，所以不要在标签外写任何内容。
 
-写故事/续写/修改情节时：
+可用标签及用途：
+
 <write_story>
 完整故事正文，直接输出内容，不含标题、解释或任何格式标记
 </write_story>
 
-更新状态卡片时（故事有重要变化，或用户要求建立设定/世界观/人物）：
 <update_state_card>
 状态卡片全文，涵盖人物/地点/时间/关键事件
 </update_state_card>
 
-更新写作规则时（用户要求修改写作风格、叙事规则等）：
 <update_writing_rules>
 完整的写作规则文本
 </update_writing_rules>
 
-添加伏笔时（用户要求创建伏笔，或伏笔为空时主动设计）：
 <add_foreshadowings>
-[{"secret":"隐藏的真相","plant_note":"暗示与误导方式"},{"secret":"另一个真相","plant_note":"另一种误导"}]
+[{"secret":"隐藏的真相","plant_note":"暗示与误导方式"}]
 </add_foreshadowings>
 
-回收伏笔时（仅当伏笔档案有待回收项）：
 <collect_foreshadowing id="F1" reveal_note="如何揭示的说明" />
 
-如果写了故事正文，必须报告正伏笔使用情况：
 <forward_foreshadowing>
 used: [{"detail":"上文细节","source":"出处","usage":"如何使用"}]
 candidates: [{"detail":"上文细节","source":"出处","potential":"可以如何利用"}]
 </forward_foreshadowing>
-如果没有则传空数组。
 
-最后必须附上简短说明：
 <chat_reply>
 1-3句说明你做了什么
 </chat_reply>
 
-如果用户的要求只需要对话回复（如闲聊、提问），只输出 <chat_reply> 即可。`
+规则：
+1. **每个开始标签必须有对应的结束标签**，如 <chat_reply>内容</chat_reply>
+2. 可以同时输出多个标签
+3. 写了 <write_story> 后必须跟 <forward_foreshadowing>
+4. 每次响应的最后必须有 <chat_reply>
+5. 如果用户只需要对话回复（闲聊、提问），只输出 <chat_reply>...</chat_reply> 即可
+6. 标签外不要写任何文字`
 
 function parsePlainActions(text: string): AIAction[] {
   const actions: AIAction[] = []
 
   const extractTag = (tag: string): string | null => {
-    // Match both <tag>content</tag> and <tag>\ncontent\n</tag>, greedy within each tag
     const re = new RegExp(`<${tag}>\\s*([\\s\\S]*?)\\s*</${tag}>`, 'g')
     let match
     let last: string | null = null
     while ((match = re.exec(text)) !== null) {
       last = match[1].trim()
     }
-    return last
+    if (last) return last
+    // Fallback: unclosed tag — grab content until next opening tag or end
+    const openIdx = text.indexOf(`<${tag}>`)
+    if (openIdx !== -1) {
+      const afterOpen = openIdx + tag.length + 2
+      const rest = text.slice(afterOpen)
+      const nextTagMatch = rest.match(/\n<[a-z_]+>/)
+      const content = (nextTagMatch ? rest.slice(0, nextTagMatch.index) : rest).trim()
+      if (content) return content
+    }
+    return null
   }
 
   const story = extractTag('write_story')

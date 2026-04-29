@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
-import { buildFixedSystemPrompt, buildDynamicContext, runIntelligentGeneration, runAutoInit, genId } from '../api'
+import { buildFixedSystemPrompt, buildDynamicContext, runIntelligentGeneration, runAutoInit, genId, AIAction } from '../api'
 import { dlog } from '../debugLog'
 import { ChatMessage } from '../types'
 import StateCard from './StateCard'
 import ForeshadowingPanel from './ForeshadowingPanel'
+import CharacterPanel from './CharacterPanel'
 
 interface Props {
   nodeId: string
   onStreamingChange: (streaming: boolean) => void
 }
 
-type Tab = 'chat' | 'state' | 'foreshadowing'
+type Tab = 'chat' | 'state' | 'foreshadowing' | 'characters'
 
 // Resize textarea without disturbing the scroll position of its parent container
 function resizeTextarea(el: HTMLTextAreaElement) {
@@ -36,6 +37,27 @@ function isDuplicateForeshadowing(
   return false
 }
 
+function buildActionSummary(actions: AIAction[]): string[] {
+  const lines: string[] = []
+  for (const a of actions) {
+    if (a.type === 'write_story') {
+      const chars = a.content.replace(/\s/g, '').length
+      lines.push(`写入正文（${chars}字）`)
+    } else if (a.type === 'update_state_card') {
+      lines.push('更新状态卡片')
+    } else if (a.type === 'update_writing_rules') {
+      lines.push('更新写作规则')
+    } else if (a.type === 'add_foreshadowings') {
+      lines.push(`新增 ${a.items.length} 条伏笔`)
+    } else if (a.type === 'collect_foreshadowing') {
+      lines.push(`回收伏笔 ${a.id}`)
+    }
+  }
+  return lines
+}
+
+const MODIFYING_ACTIONS = new Set(['write_story', 'update_state_card', 'update_writing_rules', 'add_foreshadowings', 'collect_foreshadowing'])
+
 const TOOL_LABELS: Record<string, string> = {
   __reasoning__: '思考中…',
   write_story: '编写中…',
@@ -45,6 +67,7 @@ const TOOL_LABELS: Record<string, string> = {
   add_foreshadowings: '正在创建伏笔…',
   collect_foreshadowing: '正在回收伏笔…',
   report_forward_foreshadowing: '分析正伏笔…',
+  update_characters: '更新人物卡片…',
 }
 
 function playDoneSound() {
@@ -74,13 +97,18 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     collectForeshadowing, addForeshadowing, pushUndoSnapshot,
     soundEnabled, setSoundEnabled,
     updateForwardForeshadowing, setAiWritingRules,
-    undo, undoStack,
+    undo, undoStack, characterCards,
+    addCharacterCard, updateCharacterCard, addCharacterEvent,
   } = useStore()
 
   const node = nodes[nodeId]
   const [input, setInput] = useState('')
   const [stage, setStage] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<Tab>('chat')
+  const [fineTuneMode, setFineTuneMode] = useState(false)
+  const [pendingConfirm, setPendingConfirm] = useState<{ summary: string[]; actionTypes: string[]; hasPendingStory: boolean } | null>(null)
+  const performedActionsRef = useRef<AIAction[]>([])
+  const pendingStoryRef = useRef<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const streamRafRef = useRef<number>(0)
@@ -92,168 +120,135 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [node?.chatHistory, stage])
 
+  useEffect(() => {
+    setPendingConfirm(null)
+    performedActionsRef.current = []
+    pendingStoryRef.current = null
+  }, [nodeId])
+
   if (!node) return null
 
   const foreshadowings = node.foreshadowings ?? []
   const plantedCount = foreshadowings.filter((f) => f.status === 'planted').length
 
-  const handleSend = async () => {
-    if (!input.trim() || isGenerating || !apiKey) return
-    const userText = input.trim()
-    setInput('')
-    setActiveTab('chat')
-
-    const userMsg: ChatMessage = {
-      id: genId(), role: 'user', content: userText, timestamp: Date.now(),
-    }
-    addChatMessage(nodeId, userMsg)
-
-    // Undo snapshot + rollback snapshot
-    pushUndoSnapshot()
-    const prevStoryContent = node.storyContent
-    const prevStateCard = { ...node.stateCard }
-
+  // Phase 2: full generation with all tools (story, foreshadowing, etc.)
+  const runFullGeneration = async (userText: string) => {
     const controller = new AbortController()
     abortControllerRef.current = controller
-
     setIsGenerating(true)
     onStreamingChange(true)
     setStage('思考中…')
 
-    const ancestors = getAncestorChain(nodeId)
-    const fixedSystem = buildFixedSystemPrompt(globalSettings)
-    const dynamicContext = buildDynamicContext(node, ancestors, projectWritingGuide, aiWritingRules)
-    const hasActiveForeshadowings = foreshadowings.some((f) => f.status === 'planted')
+    const latestNode = useStore.getState().nodes[nodeId]
+    if (!latestNode) { setIsGenerating(false); onStreamingChange(false); return }
 
-    // Historical instructions (no AI replies — keeps context clean)
-    const prevInstructions = node.chatHistory
+    const ancestors = getAncestorChain(nodeId)
+    const fixedSystem = buildFixedSystemPrompt(useStore.getState().globalSettings)
+    const s = useStore.getState()
+    const dynamicContext = buildDynamicContext(latestNode, ancestors, s.projectWritingGuide, s.aiWritingRules, undefined, s.characterCards)
+    const hasActive = (latestNode.foreshadowings ?? []).some((f) => f.status === 'planted')
+
+    const prevInstructions = latestNode.chatHistory
       .filter((m) => m.role === 'user')
       .map((m) => ({ role: 'user' as const, content: m.content }))
-
-    // Dynamic context is injected just before the current user message
-    const messages = [
+    const fineTuneNote = fineTuneMode
+      ? '\n\n【微调模式】仅对当前正文中需要修改的部分做最小化改动。保留所有未涉及的段落原文不变，不要重写整段或整章。只修改用户指出的具体问题，输出修改后的完整正文。'
+      : ''
+    const msgs = [
       ...prevInstructions,
-      { role: 'user' as const, content: `${dynamicContext}\n\n---\n\n${userText}` },
+      { role: 'user' as const, content: `${dynamicContext}\n\n---\n\n${userText}${fineTuneNote}` },
     ]
 
+    pushUndoSnapshot()
+
     await runIntelligentGeneration(
-      cfg,
-      fixedSystem,
-      messages,
-      hasActiveForeshadowings,
+      cfg, fixedSystem, msgs, hasActive,
       (action) => {
         if (controller.signal.aborted) return
-        dlog.info('chatpanel', `onAction: ${action.type} len=${'content' in action ? action.content.length : 0}`)
-        if (action.type === 'write_story') {
-          updateStoryContent(nodeId, action.content)
-        } else if (action.type === 'update_state_card') {
-          updateStateCard(nodeId, { content: action.content, lastUpdated: Date.now() })
-        } else if (action.type === 'update_writing_rules') {
-          setAiWritingRules(action.content)
-        } else if (action.type === 'chat_reply') {
-          addChatMessage(nodeId, {
-            id: genId(), role: 'assistant', content: action.content, timestamp: Date.now(),
-          })
-        } else if (action.type === 'add_foreshadowings') {
-          const currentForeshadowings = useStore.getState().nodes[nodeId]?.foreshadowings ?? []
-          for (const item of action.items) {
-            if (!isDuplicateForeshadowing(item.secret, currentForeshadowings)) {
-              addForeshadowing(nodeId, item.secret, item.plantNote)
+        if (action.type === 'write_story') updateStoryContent(nodeId, action.content)
+        else if (action.type === 'update_state_card') updateStateCard(nodeId, { content: action.content, lastUpdated: Date.now() })
+        else if (action.type === 'update_writing_rules') setAiWritingRules(action.content)
+        else if (action.type === 'chat_reply') addChatMessage(nodeId, { id: genId(), role: 'assistant', content: action.content, timestamp: Date.now() })
+        else if (action.type === 'add_foreshadowings') {
+          const cur = useStore.getState().nodes[nodeId]?.foreshadowings ?? []
+          for (const item of action.items) { if (!isDuplicateForeshadowing(item.secret, cur)) addForeshadowing(nodeId, item.secret, item.plantNote) }
+        } else if (action.type === 'collect_foreshadowing') collectForeshadowing(nodeId, action.id, action.revealNote)
+        else if (action.type === 'report_forward_foreshadowing') updateForwardForeshadowing(nodeId, { used: action.used, candidates: action.candidates })
+        else if (action.type === 'update_characters') {
+          const curCards = useStore.getState().characterCards
+          const nodeTitle = useStore.getState().nodes[nodeId]?.title ?? ''
+          for (const upd of action.updates) {
+            const existing = curCards.find((c) => c.name === upd.name)
+            if (existing) {
+              if (upd.baseInfo) updateCharacterCard(existing.id, { baseInfo: upd.baseInfo })
+              if (upd.personality) updateCharacterCard(existing.id, { personality: upd.personality })
+              if (upd.speechStyle) updateCharacterCard(existing.id, { speechStyle: upd.speechStyle })
+              addCharacterEvent(existing.id, { nodeTitle, description: upd.event, changes: upd.changes })
+            } else {
+              const newId = addCharacterCard(upd.name)
+              if (upd.baseInfo) updateCharacterCard(newId, { baseInfo: upd.baseInfo })
+              if (upd.personality) updateCharacterCard(newId, { personality: upd.personality })
+              if (upd.speechStyle) updateCharacterCard(newId, { speechStyle: upd.speechStyle })
+              addCharacterEvent(newId, { nodeTitle, description: upd.event, changes: upd.changes })
             }
           }
-        } else if (action.type === 'collect_foreshadowing') {
-          collectForeshadowing(nodeId, action.id, action.revealNote)
-        } else if (action.type === 'report_forward_foreshadowing') {
-          updateForwardForeshadowing(nodeId, { used: action.used, candidates: action.candidates })
         }
       },
-      (toolName) => {
-        if (!controller.signal.aborted) setStage(TOOL_LABELS[toolName] ?? '处理中…')
-      },
+      (toolName) => { if (!controller.signal.aborted) setStage(TOOL_LABELS[toolName] ?? '处理中…') },
       async () => {
         flushPendingStream()
-        // Auto-init empty fields after main generation
-        const s = useStore.getState()
-        const curNode = s.nodes[nodeId]
-        if (curNode && !controller.signal.aborted) {
+        // Auto-init
+        const st = useStore.getState()
+        const cn = st.nodes[nodeId]
+        if (cn && !controller.signal.aborted) {
           const ctx = {
-            stateCardEmpty: !curNode.stateCard.content.trim(),
-            aiWritingRulesEmpty: !s.aiWritingRules.trim(),
-            foreshadowingsEmpty: curNode.foreshadowings.length === 0,
-            stateCardContent: curNode.stateCard.content,
-            storyContext: curNode.storyContent,
-            existingForeshadowings: curNode.foreshadowings.map(f => ({ id: f.id, secret: f.secret })),
+            stateCardEmpty: !cn.stateCard.content.trim(), aiWritingRulesEmpty: !st.aiWritingRules.trim(),
+            foreshadowingsEmpty: cn.foreshadowings.length === 0, stateCardContent: cn.stateCard.content,
+            storyContext: cn.storyContent, existingForeshadowings: cn.foreshadowings.map(f => ({ id: f.id, secret: f.secret })),
           }
           if (ctx.aiWritingRulesEmpty || ctx.foreshadowingsEmpty) {
             setStage('正在初始化…')
             await runAutoInit(cfg, ctx,
-              (action) => {
+              (a) => {
                 if (controller.signal.aborted) return
-                if (action.type === 'update_writing_rules') setAiWritingRules(action.content)
-                else if (action.type === 'add_foreshadowings') {
-                  const curFs = useStore.getState().nodes[nodeId]?.foreshadowings ?? []
-                  for (const item of action.items) {
-                    if (!isDuplicateForeshadowing(item.secret, curFs)) {
-                      addForeshadowing(nodeId, item.secret, item.plantNote)
-                    }
-                  }
+                if (a.type === 'update_writing_rules') setAiWritingRules(a.content)
+                else if (a.type === 'add_foreshadowings') {
+                  const fs = useStore.getState().nodes[nodeId]?.foreshadowings ?? []
+                  for (const item of a.items) { if (!isDuplicateForeshadowing(item.secret, fs)) addForeshadowing(nodeId, item.secret, item.plantNote) }
                 }
               },
-              (toolName) => { if (!controller.signal.aborted) setStage(TOOL_LABELS[toolName] ?? '正在初始化…') },
-              () => {},
-              controller.signal,
+              (tn) => { if (!controller.signal.aborted) setStage(TOOL_LABELS[tn] ?? '正在初始化…') },
+              () => {}, controller.signal,
             )
           }
         }
         if (soundEnabled) playDoneSound()
-        setStage(null)
-        setIsGenerating(false)
-        onStreamingChange(false)
+        setStage(null); setIsGenerating(false); onStreamingChange(false)
       },
       (err) => {
-        // Cancel any pending stream updates before rolling back
         if (typewriterRef.current) { clearTimeout(typewriterRef.current.timer); typewriterRef.current = null }
-        if (streamRafRef.current) {
-          cancelAnimationFrame(streamRafRef.current)
-          streamRafRef.current = 0
-        }
+        if (streamRafRef.current) { cancelAnimationFrame(streamRafRef.current); streamRafRef.current = 0 }
         pendingStreamRef.current = {}
-        updateStoryContent(nodeId, prevStoryContent)
-        updateStateCard(nodeId, prevStateCard)
-        addChatMessage(nodeId, {
-          id: genId(), role: 'assistant', content: `生成失败：${err}`, timestamp: Date.now(),
-        })
-        setStage(null)
-        setIsGenerating(false)
-        onStreamingChange(false)
+        addChatMessage(nodeId, { id: genId(), role: 'assistant', content: `生成失败：${err}`, timestamp: Date.now() })
+        setStage(null); setIsGenerating(false); onStreamingChange(false)
       },
       controller.signal,
-      // Real-time streaming: direct DOM write for instant feedback + throttled store update
-      // When a large block arrives at once (e.g. glm-5 sends full tool args in one shot),
-      // use a typewriter effect so the user sees incremental text instead of a flash.
       (toolName, text) => {
         if (controller.signal.aborted) return
-        dlog.stream('chatpanel', `onStreamDelta [${toolName}] len=${text.length}`)
         if (toolName === 'write_story') {
           const el = document.getElementById('story-textarea') as HTMLTextAreaElement | null
           const prevLen = el?.value?.length ?? 0
           const newChars = text.length - prevLen
-
-          // If >20 new chars arrived at once, typewriter them in
           if (newChars > 20 && el) {
-            // Cancel any existing typewriter
             if (typewriterRef.current) clearTimeout(typewriterRef.current.timer)
             const tw = { full: text, pos: prevLen, timer: 0 as unknown as ReturnType<typeof setTimeout> }
             typewriterRef.current = tw
             const CHARS_PER_TICK = newChars > 1000 ? Math.max(3, Math.ceil(newChars / 300)) : 3
-            const TICK_MS = 16
             const tick = () => {
               if (controller.signal.aborted) { typewriterRef.current = null; return }
               tw.pos = Math.min(tw.pos + CHARS_PER_TICK, tw.full.length)
-              const partial = tw.full.slice(0, tw.pos)
-              el.value = partial
-              resizeTextarea(el)
-              pendingStreamRef.current.story = partial
+              if (el) { el.value = tw.full.slice(0, tw.pos); resizeTextarea(el) }
+              pendingStreamRef.current.story = tw.full.slice(0, tw.pos)
               if (!streamRafRef.current) {
                 streamRafRef.current = requestAnimationFrame(() => {
                   streamRafRef.current = 0
@@ -262,25 +257,14 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
                   if (p.stateCard !== undefined) { updateStateCard(nodeId, { content: p.stateCard, lastUpdated: Date.now() }); p.stateCard = undefined }
                 })
               }
-              if (tw.pos < tw.full.length) {
-                tw.timer = setTimeout(tick, TICK_MS)
-              } else {
-                typewriterRef.current = null
-                updateStoryContent(nodeId, tw.full)
-              }
+              if (tw.pos < tw.full.length) tw.timer = setTimeout(tick, 16)
+              else { typewriterRef.current = null; updateStoryContent(nodeId, tw.full) }
             }
-            tw.timer = setTimeout(tick, TICK_MS)
+            tw.timer = setTimeout(tick, 16)
           } else {
-            // Normal incremental streaming — write directly
-            if (typewriterRef.current) {
-              // Update the typewriter target if it's still running
-              typewriterRef.current.full = text
-            } else {
+            if (typewriterRef.current) { typewriterRef.current.full = text } else {
               pendingStreamRef.current.story = text
-              if (el) {
-                el.value = text
-                resizeTextarea(el)
-              }
+              if (el) { el.value = text; resizeTextarea(el) }
               if (!streamRafRef.current) {
                 streamRafRef.current = requestAnimationFrame(() => {
                   streamRafRef.current = 0
@@ -306,6 +290,153 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
         }
       },
       toolStreamMode,
+    )
+  }
+
+  const handleSend = async () => {
+    if (!input.trim() || isGenerating || !apiKey || pendingConfirm) return
+    const userText = input.trim()
+    setInput('')
+    setActiveTab('chat')
+
+    const userMsg: ChatMessage = {
+      id: genId(), role: 'user', content: userText, timestamp: Date.now(),
+    }
+    addChatMessage(nodeId, userMsg)
+
+    pushUndoSnapshot()
+    const prevStoryContent = node.storyContent
+    const prevStateCard = { ...node.stateCard }
+
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
+    setIsGenerating(true)
+    onStreamingChange(true)
+    setStage('思考中…')
+    performedActionsRef.current = []
+    pendingStoryRef.current = userText
+    let phase1ChatReply = ''
+
+    const ancestors = getAncestorChain(nodeId)
+    const fixedSystem = buildFixedSystemPrompt(globalSettings)
+    const dynamicContext = buildDynamicContext(node, ancestors, projectWritingGuide, aiWritingRules, undefined, characterCards)
+    const hasActiveForeshadowings = foreshadowings.some((f) => f.status === 'planted')
+
+    const prevInstructions = node.chatHistory
+      .filter((m) => m.role === 'user')
+      .map((m) => ({ role: 'user' as const, content: m.content }))
+
+    const fineTuneNote = fineTuneMode
+      ? '\n\n【微调模式】仅对当前正文中需要修改的部分做最小化改动，不要重写整段或整章。'
+      : ''
+    const messages = [
+      ...prevInstructions,
+      { role: 'user' as const, content: `${dynamicContext}\n\n---\n\n${userText}${fineTuneNote}` },
+    ]
+
+    // Phase 1: setup-only pass (write_story excluded)
+    await runIntelligentGeneration(
+      cfg,
+      fixedSystem + '\n\n【本次调用限制】本次请求仅处理设定类操作（伏笔、状态卡片、写作规则等），不要输出故事正文。如果用户请求涉及写故事，请在 chat_reply 中简要说明你的创作计划即可。',
+      messages,
+      hasActiveForeshadowings,
+      (action) => {
+        if (controller.signal.aborted) return
+        dlog.info('chatpanel', `Phase1 onAction: ${action.type}`)
+        if (action.type === 'update_state_card') {
+          performedActionsRef.current.push(action)
+          updateStateCard(nodeId, { content: action.content, lastUpdated: Date.now() })
+        } else if (action.type === 'update_writing_rules') {
+          performedActionsRef.current.push(action)
+          setAiWritingRules(action.content)
+        } else if (action.type === 'chat_reply') {
+          phase1ChatReply = action.content
+        } else if (action.type === 'add_foreshadowings') {
+          performedActionsRef.current.push(action)
+          const cur = useStore.getState().nodes[nodeId]?.foreshadowings ?? []
+          for (const item of action.items) { if (!isDuplicateForeshadowing(item.secret, cur)) addForeshadowing(nodeId, item.secret, item.plantNote) }
+        } else if (action.type === 'collect_foreshadowing') {
+          performedActionsRef.current.push(action)
+          collectForeshadowing(nodeId, action.id, action.revealNote)
+        }
+      },
+      (toolName) => {
+        if (!controller.signal.aborted) setStage(TOOL_LABELS[toolName] ?? '处理中…')
+      },
+      async () => {
+        flushPendingStream()
+        // Auto-init
+        const s = useStore.getState()
+        const curNode = s.nodes[nodeId]
+        if (curNode && !controller.signal.aborted) {
+          const ctx = {
+            stateCardEmpty: !curNode.stateCard.content.trim(), aiWritingRulesEmpty: !s.aiWritingRules.trim(),
+            foreshadowingsEmpty: curNode.foreshadowings.length === 0, stateCardContent: curNode.stateCard.content,
+            storyContext: curNode.storyContent, existingForeshadowings: curNode.foreshadowings.map(f => ({ id: f.id, secret: f.secret })),
+          }
+          if (ctx.aiWritingRulesEmpty || ctx.foreshadowingsEmpty) {
+            setStage('正在初始化…')
+            await runAutoInit(cfg, ctx,
+              (a) => {
+                if (controller.signal.aborted) return
+                if (a.type === 'update_writing_rules') setAiWritingRules(a.content)
+                else if (a.type === 'add_foreshadowings') {
+                  const fs = useStore.getState().nodes[nodeId]?.foreshadowings ?? []
+                  for (const item of a.items) { if (!isDuplicateForeshadowing(item.secret, fs)) addForeshadowing(nodeId, item.secret, item.plantNote) }
+                }
+              },
+              (tn) => { if (!controller.signal.aborted) setStage(TOOL_LABELS[tn] ?? '正在初始化…') },
+              () => {}, controller.signal,
+            )
+          }
+        }
+
+        const setupActions = performedActionsRef.current
+        if (setupActions.length > 0) {
+          // Setup changes happened — add chat_reply and show confirmation
+          if (phase1ChatReply) {
+            addChatMessage(nodeId, { id: genId(), role: 'assistant', content: phase1ChatReply, timestamp: Date.now() })
+          }
+          if (soundEnabled) playDoneSound()
+          setStage(null); setIsGenerating(false); onStreamingChange(false)
+          const summary = buildActionSummary(setupActions)
+          const actionTypes = [...new Set(setupActions.map(a => a.type))]
+          setPendingConfirm({ summary, actionTypes, hasPendingStory: true })
+        } else {
+          // No setup changes — skip confirmation, go straight to full generation
+          // Don't add Phase 1 chat_reply (it's just noise like "好的我来写")
+          setStage(null); setIsGenerating(false); onStreamingChange(false)
+          await runFullGeneration(userText)
+        }
+      },
+      (err) => {
+        if (typewriterRef.current) { clearTimeout(typewriterRef.current.timer); typewriterRef.current = null }
+        if (streamRafRef.current) { cancelAnimationFrame(streamRafRef.current); streamRafRef.current = 0 }
+        pendingStreamRef.current = {}
+        updateStoryContent(nodeId, prevStoryContent)
+        updateStateCard(nodeId, prevStateCard)
+        addChatMessage(nodeId, { id: genId(), role: 'assistant', content: `生成失败：${err}`, timestamp: Date.now() })
+        setStage(null); setIsGenerating(false); onStreamingChange(false)
+      },
+      controller.signal,
+      (toolName, text) => {
+        if (controller.signal.aborted) return
+        if (toolName === 'update_state_card') {
+          pendingStreamRef.current.stateCard = text
+          if (!streamRafRef.current) {
+            streamRafRef.current = requestAnimationFrame(() => {
+              streamRafRef.current = 0
+              const p = pendingStreamRef.current
+              if (p.stateCard !== undefined) { updateStateCard(nodeId, { content: p.stateCard, lastUpdated: Date.now() }); p.stateCard = undefined }
+            })
+          }
+        } else if (toolName === 'update_writing_rules') {
+          setAiWritingRules(text)
+        }
+      },
+      toolStreamMode,
+      ['write_story', 'report_forward_foreshadowing'],
     )
   }
 
@@ -349,7 +480,25 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     onStreamingChange(false)
   }
 
-  const isEmpty = node.chatHistory.length === 0 && !stage
+  const handleConfirm = async () => {
+    const userText = pendingStoryRef.current
+    setPendingConfirm(null)
+    performedActionsRef.current = []
+    pendingStoryRef.current = null
+    // Phase 2: generate with all tools, using confirmed setup context
+    if (userText) {
+      await runFullGeneration(userText)
+    }
+  }
+
+  const handleReject = () => {
+    pendingStoryRef.current = null
+    setPendingConfirm(null)
+    performedActionsRef.current = []
+    undo()
+  }
+
+  const isEmpty = node.chatHistory.length === 0 && !stage && !pendingConfirm
 
   const tabStyle = (tab: Tab): React.CSSProperties => ({
     color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-muted)',
@@ -388,6 +537,15 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
               <span className="ml-1 px-1 rounded-full"
                 style={{ background: 'rgba(180,140,90,0.2)', color: '#b8916a', fontSize: '9px' }}>
                 {plantedCount}
+              </span>
+            )}
+          </button>
+          <button onClick={() => setActiveTab('characters')} style={tabStyle('characters')}>
+            人物
+            {characterCards.length > 0 && (
+              <span className="ml-1 px-1 rounded-full"
+                style={{ background: 'rgba(180,140,90,0.2)', color: '#b8916a', fontSize: '9px' }}>
+                {characterCards.length}
               </span>
             )}
           </button>
@@ -443,6 +601,12 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
         </div>
       )}
 
+      {activeTab === 'characters' && (
+        <div className="flex-1 overflow-y-auto p-3">
+          <CharacterPanel />
+        </div>
+      )}
+
       {activeTab === 'chat' && (
         <>
           {/* Messages */}
@@ -479,12 +643,81 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
               </div>
             )}
 
+            {pendingConfirm && (
+              <div className="msg-enter mb-2 rounded px-3 py-2.5"
+                style={{
+                  background: 'rgba(201,169,110,0.08)',
+                  border: '1px solid var(--border-gold)',
+                }}>
+                <div className="text-xs mb-1.5" style={{ color: 'var(--gold)', fontSize: '10px', fontWeight: 500 }}>
+                  AI 执行了以下操作，请审批{pendingConfirm.hasPendingStory ? '（正文将在确认后写入）' : ''}：
+                </div>
+                <div className="mb-2">
+                  {pendingConfirm.summary.map((line, i) => (
+                    <div key={i} className="flex items-center gap-1.5" style={{ fontSize: '11px', color: 'var(--text-primary)', lineHeight: 1.8 }}>
+                      <span style={{ color: 'var(--gold)', fontSize: '8px' }}>●</span>
+                      {line}
+                    </div>
+                  ))}
+                  {pendingConfirm.hasPendingStory && (
+                    <div className="mt-1" style={{ fontSize: '10px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                      确认后将继续生成正文
+                    </div>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={handleConfirm}
+                    className="px-3 py-1 rounded text-xs transition-all hover:brightness-110"
+                    style={{
+                      background: 'rgba(201,169,110,0.2)',
+                      border: '1px solid var(--border-gold)',
+                      color: 'var(--gold)',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                    }}>
+                    确认保留
+                  </button>
+                  <button onClick={handleReject}
+                    className="px-3 py-1 rounded text-xs transition-all hover:opacity-80"
+                    style={{
+                      border: '1px solid rgba(200,80,80,0.3)',
+                      color: 'rgba(200,80,80,0.7)',
+                      fontSize: '11px',
+                    }}>
+                    撤销全部
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div ref={messagesEndRef} />
           </div>
 
           {/* Input */}
           <div className="flex-shrink-0 px-3 pb-3"
             style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '10px' }}>
+            {/* Fine-tune toggle */}
+            <div className="flex items-center gap-1.5 mb-2">
+              <button
+                onClick={() => setFineTuneMode(!fineTuneMode)}
+                className="px-2 py-0.5 rounded transition-all"
+                style={{
+                  background: fineTuneMode ? 'rgba(201,169,110,0.15)' : 'transparent',
+                  border: `1px solid ${fineTuneMode ? 'var(--border-gold)' : 'var(--border-subtle)'}`,
+                  color: fineTuneMode ? 'var(--gold)' : 'var(--text-muted)',
+                  opacity: fineTuneMode ? 1 : 0.5,
+                  cursor: 'pointer',
+                  fontSize: '10px',
+                }}
+              >
+                微调模式
+              </button>
+              {fineTuneMode && (
+                <span style={{ color: 'var(--text-muted)', fontSize: '9px', opacity: 0.6 }}>
+                  仅对现有正文做最小化修改
+                </span>
+              )}
+            </div>
             {!apiKey && (
               <p className="text-xs text-center mb-2" style={{ color: 'rgba(200,80,80,0.7)', fontSize: '11px' }}>
                 请先在顶栏配置 API Key
@@ -501,8 +734,8 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                disabled={isGenerating || !apiKey}
-                placeholder={isGenerating ? '生成中…' : '输入创作指令，回车发送…'}
+                disabled={isGenerating || !apiKey || !!pendingConfirm}
+                placeholder={pendingConfirm ? '请先确认或撤销上方操作…' : isGenerating ? '生成中…' : '输入创作指令，回车发送…'}
                 rows={2}
                 className="flex-1 resize-none outline-none text-xs"
                 style={{
@@ -515,18 +748,18 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
               />
               <button
                 onClick={handleSend}
-                disabled={isGenerating || !apiKey || !input.trim()}
+                disabled={isGenerating || !apiKey || !input.trim() || !!pendingConfirm}
                 className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded transition-all"
                 style={{
                   background:
-                    isGenerating || !apiKey || !input.trim()
+                    isGenerating || !apiKey || !input.trim() || pendingConfirm
                       ? 'rgba(201,169,110,0.15)'
                       : 'var(--gold)',
-                  opacity: isGenerating || !apiKey || !input.trim() ? 0.5 : 1,
+                  opacity: isGenerating || !apiKey || !input.trim() || pendingConfirm ? 0.5 : 1,
                 }}>
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
                   <path d="M2 10L6 2L10 10L6 8L2 10Z"
-                    fill={isGenerating || !apiKey || !input.trim() ? 'var(--gold)' : '#0e0d15'} />
+                    fill={isGenerating || !apiKey || !input.trim() || pendingConfirm ? 'var(--gold)' : '#0e0d15'} />
                 </svg>
               </button>
             </div>

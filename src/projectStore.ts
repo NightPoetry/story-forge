@@ -7,7 +7,7 @@ import {
   importJsonFile, buildStoryChainText, initStorage,
 } from './storage'
 import {
-  ChatMessage, FullProjectData, ProjectMeta, SingleBackupFile, MultiBackupFile, StoryNodeData, TrashedNodeGroup,
+  CharacterCard, ChatMessage, FullProjectData, ProjectMeta, SingleBackupFile, MultiBackupFile, StoryNodeData, TrashedNodeGroup,
 } from './types'
 import { genId } from './api'
 
@@ -27,7 +27,7 @@ interface ProjectStore {
   restoreProject: (id: string) => Promise<void>
   permanentDeleteProject: (id: string) => Promise<void>
   renameProject: (id: string, name: string) => Promise<void>
-  saveProjectData: (projectId: string, nodes: FullProjectData['nodes'], rootNodeId: string | null, writingGuide?: string, aiWritingRules?: string, writingGuideChatHistory?: ChatMessage[], trashedNodes?: TrashedNodeGroup[]) => Promise<void>
+  saveProjectData: (projectId: string, nodes: FullProjectData['nodes'], rootNodeId: string | null, writingGuide?: string, aiWritingRules?: string, writingGuideChatHistory?: ChatMessage[], trashedNodes?: TrashedNodeGroup[], characterCards?: CharacterCard[]) => Promise<void>
 
   // Export
   exportProjectBackup: (projectId: string, currentNodes?: FullProjectData['nodes'], rootNodeId?: string | null) => Promise<void>
@@ -119,7 +119,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
     if (data) await writeProjectData({ ...data, name })
   },
 
-  saveProjectData: async (projectId, nodes, rootNodeId, writingGuide = '', aiWritingRules = '', writingGuideChatHistory = [], trashedNodes = []) => {
+  saveProjectData: async (projectId, nodes, rootNodeId, writingGuide = '', aiWritingRules = '', writingGuideChatHistory = [], trashedNodes = [], characterCards = []) => {
     const meta = get().projects.find((p) => p.id === projectId)
     if (!meta) return
 
@@ -135,6 +135,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
       aiWritingRules,
       writingGuideChatHistory,
       trashedNodes: trashedNodes ?? [],
+      characterCards: characterCards ?? [],
       createdAt: meta.createdAt,
       updatedAt: now,
     }
