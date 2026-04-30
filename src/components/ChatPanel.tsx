@@ -68,6 +68,7 @@ const TOOL_LABELS: Record<string, string> = {
   collect_foreshadowing: '正在回收伏笔…',
   report_forward_foreshadowing: '分析正伏笔…',
   update_characters: '更新人物卡片…',
+  edit_story: '正在修改正文…',
 }
 
 function playDoneSound() {
@@ -99,6 +100,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     updateForwardForeshadowing, setAiWritingRules,
     undo, undoStack, characterCards,
     addCharacterCard, updateCharacterCard, addCharacterEvent,
+    addStoryEdit,
   } = useStore()
 
   const node = nodes[nodeId]
@@ -148,14 +150,13 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     const dynamicContext = buildDynamicContext(latestNode, ancestors, s.projectWritingGuide, s.aiWritingRules, undefined, s.characterCards)
     const hasActive = (latestNode.foreshadowings ?? []).some((f) => f.status === 'planted')
 
-    const prevInstructions = latestNode.chatHistory
-      .filter((m) => m.role === 'user')
-      .map((m) => ({ role: 'user' as const, content: m.content }))
+    const prevMessages = latestNode.chatHistory
+      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
     const fineTuneNote = fineTuneMode
       ? '\n\n【微调模式】仅对当前正文中需要修改的部分做最小化改动。保留所有未涉及的段落原文不变，不要重写整段或整章。只修改用户指出的具体问题，输出修改后的完整正文。'
       : ''
     const msgs = [
-      ...prevInstructions,
+      ...prevMessages,
       { role: 'user' as const, content: `${dynamicContext}\n\n---\n\n${userText}${fineTuneNote}` },
     ]
 
@@ -173,6 +174,16 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
           const cur = useStore.getState().nodes[nodeId]?.foreshadowings ?? []
           for (const item of action.items) { if (!isDuplicateForeshadowing(item.secret, cur)) addForeshadowing(nodeId, item.secret, item.plantNote) }
         } else if (action.type === 'collect_foreshadowing') collectForeshadowing(nodeId, action.id, action.revealNote)
+        else if (action.type === 'edit_story') {
+          let content = useStore.getState().nodes[nodeId]?.storyContent ?? ''
+          for (const e of action.edits) {
+            if (content.includes(e.oldText)) {
+              content = content.replace(e.oldText, e.newText)
+              addStoryEdit(nodeId, { id: genId(), oldText: e.oldText, newText: e.newText, timestamp: Date.now(), trigger: userText })
+            }
+          }
+          updateStoryContent(nodeId, content)
+        }
         else if (action.type === 'report_forward_foreshadowing') updateForwardForeshadowing(nodeId, { used: action.used, candidates: action.candidates })
         else if (action.type === 'update_characters') {
           const curCards = useStore.getState().characterCards
@@ -323,15 +334,14 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     const dynamicContext = buildDynamicContext(node, ancestors, projectWritingGuide, aiWritingRules, undefined, characterCards)
     const hasActiveForeshadowings = foreshadowings.some((f) => f.status === 'planted')
 
-    const prevInstructions = node.chatHistory
-      .filter((m) => m.role === 'user')
-      .map((m) => ({ role: 'user' as const, content: m.content }))
+    const prevMessages = node.chatHistory
+      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
 
     const fineTuneNote = fineTuneMode
       ? '\n\n【微调模式】仅对当前正文中需要修改的部分做最小化改动，不要重写整段或整章。'
       : ''
     const messages = [
-      ...prevInstructions,
+      ...prevMessages,
       { role: 'user' as const, content: `${dynamicContext}\n\n---\n\n${userText}${fineTuneNote}` },
     ]
 
@@ -436,7 +446,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
         }
       },
       toolStreamMode,
-      ['write_story', 'report_forward_foreshadowing'],
+      ['write_story', 'edit_story', 'report_forward_foreshadowing'],
     )
   }
 

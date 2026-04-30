@@ -89,8 +89,7 @@ export default function ExportModal({ nodeId, onClose }: Props) {
               </div>
               <button
                 onClick={() => {
-                  const snap = getProjectSnapshot()
-                  handle('backup', () => exportProjectBackup(currentProjectId!, snap.nodes, snap.rootNodeId))
+                  handle('backup', () => exportProjectBackup(currentProjectId!, getProjectSnapshot()))
                 }}
                 disabled={exporting === 'backup'}
                 className="flex-shrink-0 px-3 py-1.5 rounded text-xs font-medium transition-all"

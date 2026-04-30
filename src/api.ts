@@ -84,6 +84,17 @@ export function buildDynamicContext(
     }
   }
 
+  // 当前节点正文（过滤掉划掉的文本）
+  if (node.storyContent.trim()) {
+    let cleanContent = node.storyContent.trim()
+    for (const st of node.strikethroughs ?? []) {
+      cleanContent = cleanContent.split(st.text).join('')
+    }
+    if (cleanContent.trim()) {
+      parts.push(`# 当前节点正文「${node.title}」\n以下是本节已有的故事正文。用户要求修改时，基于此文本进行调整；用户要求续写时，从此文本末尾继续。\n\n${cleanContent.trim()}`)
+    }
+  }
+
   // 伏笔档案
   const foreshadowings = t.includeForeshadowings ? (node.foreshadowings ?? []) : []
   const planted = foreshadowings.filter((f) => f.status === 'planted')
@@ -153,7 +164,7 @@ export function buildDynamicContext(
   // 节点信息 + 字数要求
   const metaLines: string[] = [`当前节点名称：「${node.title}」`]
   if (node.targetWordCount && node.targetWordCount > 0) {
-    metaLines.push(`写作字数要求：本节正文**不少于 ${node.targetWordCount} 字**，可适当超出以保证章节完整性，但绝不能少于此数目。`)
+    metaLines.push(`写作字数要求：本节正文目标 **${node.targetWordCount} 字**左右。以章节完整性为优先——在情节的自然段落处收束（场景转换、悬念落点、情绪转折等），不要为凑字数而拖沓，也不要在高潮中途截断。字数可在目标值上下 10% 浮动，但不得大幅偏离。`)
   }
   parts.push(metaLines.join('\n'))
 
@@ -295,6 +306,30 @@ const UPDATE_CHARACTERS_TOOL = {
   },
 } as const
 
+const EDIT_STORY_TOOL = {
+  name: 'edit_story',
+  description:
+    '对当前节点正文进行定向修改。当用户要求修改特定段落、句子或细节时使用此工具，而非用 write_story 重写整篇正文。每项编辑指定要替换的原文和替换后的新文本。',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      edits: {
+        type: 'array',
+        description: '定向编辑列表',
+        items: {
+          type: 'object',
+          properties: {
+            old_text: { type: 'string', description: '要替换的原文片段（必须与正文中的文本完全匹配）' },
+            new_text: { type: 'string', description: '替换后的新文本' },
+          },
+          required: ['old_text', 'new_text'],
+        },
+      },
+    },
+    required: ['edits'],
+  },
+} as const
+
 const REPORT_FORWARD_FORESHADOWING_TOOL = {
   name: 'report_forward_foreshadowing',
   description:
@@ -334,7 +369,8 @@ const REPORT_FORWARD_FORESHADOWING_TOOL = {
 } as const
 
 const TOOL_GUIDANCE = `你是专业故事创作助手。根据用户指令，调用合适的工具：
-- 用户要写/续写/修改故事情节 → 调用 write_story
+- 用户要写/续写故事情节，或需要大幅重写 → 调用 write_story
+- 用户要求修改特定段落、句子、措辞或细节（局部调整） → 调用 edit_story（精准替换，不影响其余正文）
   - 【正伏笔·自动】写作时主动回溯上文已有的细节（人物动作、物品、场景描写、对话中不经意提到的信息等），将其自然地编织进当前剧情以增强合理性。例如：主角陷入困境时，用上文中某个不起眼的细节帮助脱困；新的剧情转折通过前文某句话获得了伏笔式的呼应。这种"其实前面早就写过"的惊喜感是正伏笔的核心。
   - 【逆伏笔·设计】根据伏笔档案中的隐藏真相，在故事中植入暗示但必须用剧情歪曲其含义，让读者和主角一同被误导——暗示要有，但理解方向必须是错的。
   - 调用 write_story 后**必须**调用 report_forward_foreshadowing，报告用了哪些上文细节、还有哪些可用的候选细节。
@@ -401,6 +437,7 @@ export type AIAction =
   | { type: 'add_foreshadowings'; items: { secret: string; plantNote: string }[] }
   | { type: 'report_forward_foreshadowing'; used: { detail: string; source: string; usage: string }[]; candidates: { detail: string; source: string; potential: string }[] }
   | { type: 'update_characters'; updates: { name: string; baseInfo?: string; personality?: string; speechStyle?: string; event: string; changes: string }[] }
+  | { type: 'edit_story'; edits: { oldText: string; newText: string }[] }
 
 export type AIGuideAction =
   | { type: 'update_guide'; content: string }
@@ -568,6 +605,7 @@ export async function runIntelligentGeneration(
   const exclude = new Set(excludeTools ?? [])
   const tools = [
     ...STORY_TOOLS,
+    EDIT_STORY_TOOL,
     UPDATE_WRITING_RULES_TOOL,
     UPDATE_CHARACTERS_TOOL,
     ADD_FORESHADOWING_TOOL,
@@ -667,6 +705,10 @@ async function runAnthropicStreamingToolUse(
               else if (block.name === 'add_foreshadowings') {
                 const items = ((input.items as { secret: string; plant_note: string }[]) ?? []).map(i => ({ secret: i.secret ?? '', plantNote: i.plant_note ?? '' }))
                 if (items.length > 0) onAction({ type: 'add_foreshadowings', items })
+              }
+              else if (block.name === 'edit_story') {
+                const edits = ((input.edits as { old_text: string; new_text: string }[]) ?? []).map(e => ({ oldText: e.old_text ?? '', newText: e.new_text ?? '' }))
+                if (edits.length > 0) onAction({ type: 'edit_story', edits })
               }
               else if (block.name === 'report_forward_foreshadowing') {
                 onAction({
@@ -806,6 +848,10 @@ async function runOpenAIToolUse(
       else if (accum.name === 'add_foreshadowings') {
         const items = ((args.items as { secret: string; plant_note: string }[]) ?? []).map(i => ({ secret: i.secret ?? '', plantNote: i.plant_note ?? '' }))
         if (items.length > 0) onAction({ type: 'add_foreshadowings', items })
+      }
+      else if (accum.name === 'edit_story') {
+        const edits = ((args.edits as { old_text: string; new_text: string }[]) ?? []).map(e => ({ oldText: e.old_text ?? '', newText: e.new_text ?? '' }))
+        if (edits.length > 0) onAction({ type: 'edit_story', edits })
       }
       else if (accum.name === 'report_forward_foreshadowing') {
         onAction({

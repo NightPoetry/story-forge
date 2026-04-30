@@ -60,6 +60,16 @@ export default function ProjectsPage() {
           foreshadowingCounter: node.foreshadowingCounter ?? (nid === data.rootNodeId ? (data.foreshadowingCounter ?? 0) : 0),
         }])
       )
+      // Migrate: flatten branch chains — branch-of-branch should be siblings, not nested chains
+      for (const node of Object.values(migratedNodes)) {
+        if (node.branchType === 'branch' && node.parentId) {
+          let ancestor = migratedNodes[node.parentId]
+          while (ancestor && ancestor.branchType === 'branch' && ancestor.parentId) {
+            node.parentId = ancestor.parentId
+            ancestor = migratedNodes[ancestor.parentId]
+          }
+        }
+      }
       resetWithProjectData(migratedNodes, data.rootNodeId, data.writingGuide ?? '', data.aiWritingRules ?? '', data.writingGuideChatHistory ?? [], data.trashedNodes ?? [], data.characterCards ?? [])
     } else {
       resetWithProjectData({}, null, '', '', [], [], [])

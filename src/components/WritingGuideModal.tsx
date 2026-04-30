@@ -9,12 +9,15 @@ interface Props {
   onClose: () => void
 }
 
+type ContextMode = 'current' | 'full' | 'intent'
+
 export default function WritingGuideModal({ onClose }: Props) {
   const {
     projectWritingGuide, setProjectWritingGuide,
     writingGuideChatHistory, addWritingGuideChatMessage,
     apiKey, apiUrl, apiFormat, apiModel,
-    nodes, selectedNodeId, getAncestorChain, aiWritingRules,
+    nodes, selectedNodeId, rootNodeId, getAncestorChain, aiWritingRules,
+    characterCards,
   } = useStore()
 
   const [guideDraft, setGuideDraft] = useState(projectWritingGuide)
@@ -25,19 +28,95 @@ export default function WritingGuideModal({ onClose }: Props) {
   const abortRef = useRef<AbortController | null>(null)
   const cfg = { apiKey, apiUrl, apiFormat, apiModel }
 
+  const [contextMode, setContextMode] = useState<ContextMode>('current')
+  const [focusNodeId, setFocusNodeId] = useState<string>(selectedNodeId ?? rootNodeId ?? '')
+  const [extraNodeIds, setExtraNodeIds] = useState<Set<string>>(new Set())
+
+  const allNodes = Object.values(nodes)
+
+  const toggleExtraNode = (id: string) => {
+    setExtraNodeIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
   const buildStoryContext = () => {
     const parts: string[] = []
-    const node = selectedNodeId ? nodes[selectedNodeId] : null
-    if (node) {
-      const ancestors = getAncestorChain(selectedNodeId!)
-      const chain = [...ancestors, node].filter(n => n.storyContent.trim())
-      if (chain.length > 0) parts.push(chain.map(n => `【${n.title}】${n.storyContent.trim().slice(0, 300)}`).join('\n'))
-      if (node.stateCard.content.trim()) parts.push(`状态卡片：${node.stateCard.content.trim()}`)
-      const fs = node.foreshadowings?.filter(f => f.status === 'planted') ?? []
-      if (fs.length > 0) parts.push(`伏笔(${fs.length}条)：${fs.map(f => `[${f.id}]${f.secret.slice(0, 40)}`).join('；')}`)
+
+    if (contextMode === 'intent') {
+      // 用户意图模式：收集所有用户对话，不看正文
+      const userMsgs: { source: string; content: string }[] = []
+
+      // 各节点的用户对话
+      for (const n of allNodes) {
+        const userOnly = n.chatHistory.filter(m => m.role === 'user')
+        for (const m of userOnly) userMsgs.push({ source: `节点「${n.title}」`, content: m.content })
+      }
+
+      // 设定助手的用户对话
+      for (const m of writingGuideChatHistory) {
+        if (m.role === 'user') userMsgs.push({ source: '设定助手', content: m.content })
+      }
+
+      if (userMsgs.length > 0) {
+        parts.push('# 用户全部对话记录（按来源分组）\n以下是用户在各处发出的所有指令和对话。请从中提炼故事设定、世界观、人物关系、文风偏好等信息，整合到设定文档中。\n\n' +
+          userMsgs.map(m => `[${m.source}] ${m.content}`).join('\n'))
+      }
+
+      // 各节点的状态卡片（包含设定信息）
+      const stateCards = allNodes.filter(n => n.stateCard.content.trim())
+      if (stateCards.length > 0) {
+        parts.push('# 各节点状态卡片\n' + stateCards.map(n => `## 「${n.title}」\n${n.stateCard.content.trim()}`).join('\n\n'))
+      }
+
+      // 附加节点的正文（用户手动勾选）
+      if (extraNodeIds.size > 0) {
+        const extras = allNodes.filter(n => extraNodeIds.has(n.id) && n.storyContent.trim())
+        if (extras.length > 0) {
+          parts.push('# 附加参考节点正文\n' + extras.map(n => `## 「${n.title}」\n${n.storyContent.trim()}`).join('\n\n'))
+        }
+      }
+    } else if (contextMode === 'full') {
+      // 全量模式：所有节点完整正文 + 对话历史
+      const sorted = allNodes.filter(n => n.storyContent.trim())
+      if (sorted.length > 0) {
+        parts.push('# 全量故事上下文\n' + sorted.map(n => {
+          const lines = [`## 「${n.title}」（${n.branchType === 'root' ? '根' : n.branchType === 'branch' ? '分支' : '续篇'}）`]
+          lines.push(n.storyContent.trim())
+          if (n.chatHistory.length > 0) {
+            lines.push('\n对话记录：')
+            for (const m of n.chatHistory) lines.push(`[${m.role}] ${m.content}`)
+          }
+          return lines.join('\n')
+        }).join('\n\n---\n\n'))
+      }
+    } else {
+      // 微调模式：选中节点的完整内容
+      const node = focusNodeId ? nodes[focusNodeId] : null
+      if (node) {
+        const ancestors = getAncestorChain(focusNodeId)
+        const chain = [...ancestors, node].filter(n => n.storyContent.trim())
+        if (chain.length > 0) {
+          parts.push('# 故事上下文（至选中节点）\n' + chain.map(n =>
+            `## 「${n.title}」\n${n.storyContent.trim()}`
+          ).join('\n\n'))
+        }
+        if (node.chatHistory.length > 0) {
+          parts.push('# 选中节点对话记录\n' + node.chatHistory.map(m => `[${m.role}] ${m.content}`).join('\n'))
+        }
+        if (node.stateCard.content.trim()) parts.push(`# 状态卡片\n${node.stateCard.content.trim()}`)
+        const fs = node.foreshadowings?.filter(f => f.status === 'planted') ?? []
+        if (fs.length > 0) parts.push(`# 伏笔\n${fs.map(f => `[${f.id}] ${f.secret}`).join('\n')}`)
+      }
     }
-    if (aiWritingRules.trim()) parts.push(`写作规则：${aiWritingRules.trim().slice(0, 200)}`)
-    return parts.join('\n\n')
+
+    if (characterCards.length > 0) {
+      parts.push('# 人物卡片\n' + characterCards.map(c => `${c.name}：${c.baseInfo}`).join('\n'))
+    }
+    if (aiWritingRules.trim()) parts.push(`# 写作规则\n${aiWritingRules.trim()}`)
+    return parts.join('\n\n---\n\n')
   }
 
   // Sync draft when guide is updated from outside (e.g. another component)
@@ -222,20 +301,79 @@ export default function WritingGuideModal({ onClose }: Props) {
             className="flex-shrink-0 flex flex-col"
             style={{ width: 'min(360px, 42%)' }}>
 
-            {/* Right column label */}
+            {/* Right column label + context controls */}
             <div
-              className="flex-shrink-0 flex items-center justify-between px-4 py-2"
+              className="flex-shrink-0 px-4 py-2"
               style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-              <span style={{ color: 'var(--text-muted)', fontSize: '10px', letterSpacing: '0.07em', textTransform: 'uppercase' }}>
-                AI 设定助手
-              </span>
-              {isGenerating && (
-                <button
-                  onClick={handleAbort}
-                  className="text-xs px-2 py-0.5 rounded"
-                  style={{ color: '#e06060', border: '1px solid rgba(200,80,80,0.3)', fontSize: '10px' }}>
-                  停止
-                </button>
+              <div className="flex items-center justify-between mb-1.5">
+                <span style={{ color: 'var(--text-muted)', fontSize: '10px', letterSpacing: '0.07em', textTransform: 'uppercase' }}>
+                  AI 设定助手
+                </span>
+                {isGenerating && (
+                  <button
+                    onClick={handleAbort}
+                    className="text-xs px-2 py-0.5 rounded"
+                    style={{ color: '#e06060', border: '1px solid rgba(200,80,80,0.3)', fontSize: '10px' }}>
+                    停止
+                  </button>
+                )}
+              </div>
+              {/* Mode toggle + node selector */}
+              <div className="flex items-center gap-1 flex-wrap">
+                {(['current', 'full', 'intent'] as ContextMode[]).map(mode => (
+                  <button
+                    key={mode}
+                    onClick={() => setContextMode(mode)}
+                    className="text-xs px-2 py-0.5 rounded transition-all"
+                    style={{
+                      background: contextMode === mode ? 'rgba(80,160,80,0.12)' : 'transparent',
+                      border: `1px solid ${contextMode === mode ? 'rgba(80,160,80,0.3)' : 'var(--border-subtle)'}`,
+                      color: contextMode === mode ? 'rgba(120,200,120,0.9)' : 'var(--text-muted)',
+                      fontSize: '10px',
+                    }}>
+                    {{ current: '微调', full: '全量', intent: '用户意图' }[mode]}
+                  </button>
+                ))}
+                {contextMode === 'current' && (
+                  <select
+                    value={focusNodeId}
+                    onChange={(e) => setFocusNodeId(e.target.value)}
+                    className="text-xs rounded outline-none flex-1 min-w-0"
+                    style={{
+                      background: 'var(--bg-elevated)',
+                      border: '1px solid var(--border-subtle)',
+                      color: 'var(--text-primary)',
+                      fontSize: '10px',
+                      padding: '2px 4px',
+                    }}>
+                    {allNodes.map(n => (
+                      <option key={n.id} value={n.id}>
+                        {n.title}{n.storyContent.trim() ? ` (${n.storyContent.replace(/\s/g, '').length}字)` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              {/* 用户意图模式：附加节点选择 */}
+              {contextMode === 'intent' && allNodes.some(n => n.storyContent.trim()) && (
+                <div className="flex flex-wrap gap-1 mt-1.5" style={{ maxHeight: '52px', overflowY: 'auto' }}>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '9px', lineHeight: '20px' }}>附加正文：</span>
+                  {allNodes.filter(n => n.storyContent.trim()).map(n => (
+                    <button
+                      key={n.id}
+                      onClick={() => toggleExtraNode(n.id)}
+                      className="text-xs px-1.5 py-0 rounded transition-all"
+                      style={{
+                        background: extraNodeIds.has(n.id) ? 'rgba(201,169,110,0.15)' : 'transparent',
+                        border: `1px solid ${extraNodeIds.has(n.id) ? 'var(--border-gold)' : 'var(--border-subtle)'}`,
+                        color: extraNodeIds.has(n.id) ? 'var(--gold)' : 'var(--text-muted)',
+                        fontSize: '9px',
+                        lineHeight: '18px',
+                      }}>
+                      {n.title}
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
 

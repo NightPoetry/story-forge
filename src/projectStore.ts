@@ -30,7 +30,7 @@ interface ProjectStore {
   saveProjectData: (projectId: string, nodes: FullProjectData['nodes'], rootNodeId: string | null, writingGuide?: string, aiWritingRules?: string, writingGuideChatHistory?: ChatMessage[], trashedNodes?: TrashedNodeGroup[], characterCards?: CharacterCard[]) => Promise<void>
 
   // Export
-  exportProjectBackup: (projectId: string, currentNodes?: FullProjectData['nodes'], rootNodeId?: string | null) => Promise<void>
+  exportProjectBackup: (projectId: string, snapshot?: Pick<FullProjectData, 'nodes' | 'rootNodeId' | 'writingGuide' | 'aiWritingRules' | 'writingGuideChatHistory' | 'trashedNodes' | 'characterCards'>) => Promise<void>
   exportMultipleBackup: (projectIds: string[], passwords: Record<string, string>) => Promise<void>
   exportStoryChain: (chain: StoryNodeData[], projectName: string, fmt: 'txt' | 'md') => Promise<void>
   exportSingleNode: (node: StoryNodeData, projectName: string, fmt: 'txt' | 'md') => Promise<void>
@@ -149,16 +149,20 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
 
   // ── Export ──────────────────────────────────────────────────────────────
 
-  exportProjectBackup: async (projectId, currentNodes, rootNodeId) => {
+  exportProjectBackup: async (projectId, snapshot) => {
     const meta = get().projects.find((p) => p.id === projectId)
     if (!meta) return
 
     let data: FullProjectData | null
-    if (currentNodes !== undefined) {
+    if (snapshot !== undefined) {
       data = {
         id: projectId, name: meta.name, passwordHash: meta.passwordHash,
-        nodes: currentNodes, rootNodeId: rootNodeId ?? null,
-        writingGuide: '',
+        nodes: snapshot.nodes, rootNodeId: snapshot.rootNodeId ?? null,
+        writingGuide: snapshot.writingGuide ?? '',
+        aiWritingRules: snapshot.aiWritingRules ?? '',
+        writingGuideChatHistory: snapshot.writingGuideChatHistory ?? [],
+        trashedNodes: snapshot.trashedNodes ?? [],
+        characterCards: snapshot.characterCards ?? [],
         createdAt: meta.createdAt, updatedAt: Date.now(),
       }
     } else {

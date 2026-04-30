@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { FloatingEditButton, RevisionOverlay } from './InlineRevision'
+import type { StoryEdit, Strikethrough } from '../types'
+import { genId } from '../api'
 
 interface Props {
   nodeId: string
@@ -30,17 +32,157 @@ const LETTER_SPACINGS = [
   { label: '宽', value: 0.1 },
 ]
 
+type DiffSegment =
+  | { type: 'plain'; text: string }
+  | { type: 'edit'; edit: StoryEdit }
+  | { type: 'strike'; st: Strikethrough }
+
+function buildDiffSegments(content: string, edits: StoryEdit[], strikes: Strikethrough[]): DiffSegment[] {
+  const marks: { start: number; end: number; seg: DiffSegment }[] = []
+
+  for (const edit of edits) {
+    if (edit.dismissed) continue
+    const idx = content.indexOf(edit.newText)
+    if (idx >= 0) marks.push({ start: idx, end: idx + edit.newText.length, seg: { type: 'edit', edit } })
+  }
+  for (const st of strikes) {
+    const idx = content.indexOf(st.text)
+    if (idx >= 0) marks.push({ start: idx, end: idx + st.text.length, seg: { type: 'strike', st } })
+  }
+
+  marks.sort((a, b) => a.start - b.start)
+  const filtered: typeof marks = []
+  let lastEnd = 0
+  for (const m of marks) {
+    if (m.start >= lastEnd) { filtered.push(m); lastEnd = m.end }
+  }
+
+  const segments: DiffSegment[] = []
+  let cursor = 0
+  for (const m of filtered) {
+    if (m.start > cursor) segments.push({ type: 'plain', text: content.slice(cursor, m.start) })
+    segments.push(m.seg)
+    cursor = m.end
+  }
+  if (cursor < content.length) segments.push({ type: 'plain', text: content.slice(cursor) })
+  return segments
+}
+
+function DiffView({ nodeId, content, edits, strikes, fontSize, lineHeight, letterSpacing }: {
+  nodeId: string
+  content: string
+  edits: StoryEdit[]
+  strikes: Strikethrough[]
+  fontSize: number
+  lineHeight: number
+  letterSpacing: number
+}) {
+  const { dismissStoryEdit, undismissStoryEdit, removeStrikethrough } = useStore()
+  const [hoveredId, setHoveredId] = useState<string | null>(null)
+  const segments = buildDiffSegments(content, edits, strikes)
+
+  return (
+    <div
+      className="story-text w-full"
+      style={{
+        fontSize: `${fontSize}px`,
+        lineHeight,
+        letterSpacing: `${letterSpacing}em`,
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        minHeight: '200px',
+      }}>
+      {segments.map((seg, i) => {
+        if (seg.type === 'plain') return <span key={i}>{seg.text}</span>
+
+        if (seg.type === 'strike') return (
+          <span
+            key={seg.st.id}
+            onMouseEnter={() => setHoveredId(seg.st.id)}
+            onMouseLeave={() => setHoveredId(null)}
+            style={{
+              textDecoration: 'line-through',
+              color: 'rgba(200,80,80,0.4)',
+              background: 'rgba(200,80,80,0.05)',
+              cursor: 'default',
+              position: 'relative',
+            }}>
+            {seg.st.text}
+            {hoveredId === seg.st.id && (
+              <span style={{
+                position: 'absolute', bottom: 'calc(100% + 4px)', left: 0,
+                background: '#1a1825', border: '1px solid var(--border-gold)', borderRadius: '4px',
+                padding: '6px 10px', fontSize: '11px', lineHeight: 1.5, color: 'var(--text-muted)',
+                whiteSpace: 'nowrap', zIndex: 100, boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+              }}>
+                <span style={{ color: 'rgba(200,80,80,0.7)', fontSize: '10px' }}>手动划掉 · {new Date(seg.st.timestamp).toLocaleString('zh-CN')}</span>
+                <br />
+                <button
+                  onClick={(e) => { e.stopPropagation(); removeStrikethrough(nodeId, seg.st.id) }}
+                  style={{ color: 'var(--gold)', fontSize: '10px', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>
+                  取消划掉
+                </button>
+              </span>
+            )}
+          </span>
+        )
+
+        // type === 'edit'
+        return (
+          <span key={seg.edit.id} className="relative inline">
+            <span style={{ textDecoration: 'line-through', color: 'rgba(200,80,80,0.45)', background: 'rgba(200,80,80,0.06)' }}>
+              {seg.edit.oldText}
+            </span>
+            <span
+              onMouseEnter={() => setHoveredId(seg.edit.id)}
+              onMouseLeave={() => setHoveredId(null)}
+              style={{
+                color: 'rgba(80,180,120,0.9)', background: 'rgba(80,180,120,0.08)',
+                borderBottom: '1px dashed rgba(80,180,120,0.3)',
+                cursor: 'default', position: 'relative',
+              }}>
+              {seg.edit.newText}
+              {hoveredId === seg.edit.id && (
+                <span style={{
+                  position: 'absolute', bottom: 'calc(100% + 4px)', left: 0,
+                  background: '#1a1825', border: '1px solid var(--border-gold)', borderRadius: '4px',
+                  padding: '6px 10px', fontSize: '11px', lineHeight: 1.5, color: 'var(--text-muted)',
+                  whiteSpace: 'nowrap', zIndex: 100, boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+                }}>
+                  <span style={{ color: 'var(--gold)', fontSize: '10px' }}>
+                    {new Date(seg.edit.timestamp).toLocaleString('zh-CN')}
+                  </span>
+                  <br />
+                  <span style={{ fontSize: '10px' }}>触发：{seg.edit.trigger.slice(0, 60)}{seg.edit.trigger.length > 60 ? '…' : ''}</span>
+                  <br />
+                  <button
+                    onClick={(e) => { e.stopPropagation(); dismissStoryEdit(nodeId, seg.edit.id) }}
+                    style={{ color: 'var(--gold)', fontSize: '10px', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline', marginTop: '2px' }}>
+                    隐藏此修改
+                  </button>
+                </span>
+              )}
+            </span>
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function StoryPanel({ nodeId, isStreaming }: Props) {
   const {
     nodes, updateStoryContent, updateNodeTitle, updateTargetWordCount,
     editorFontSize, editorLineHeight, editorLetterSpacing,
     setEditorFontSize, setEditorLineHeight, setEditorLetterSpacing,
+    addStrikethrough, undismissStoryEdit,
   } = useStore()
   const node = nodes[nodeId]
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [editingTarget, setEditingTarget] = useState(false)
   const [targetInput, setTargetInput] = useState('')
   const [showTypography, setShowTypography] = useState(false)
+  const [showDiffs, setShowDiffs] = useState(true)
   const typographyRef = useRef<HTMLDivElement>(null)
   const rafRef = useRef<number>(0)
 
@@ -80,6 +222,12 @@ export default function StoryPanel({ nodeId, isStreaming }: Props) {
   }, [showTypography])
 
   if (!node) return null
+
+  const allEdits = node.editHistory ?? []
+  const visibleEdits = allEdits.filter(e => !e.dismissed && node.storyContent.includes(e.newText))
+  const dismissedEdits = allEdits.filter(e => e.dismissed && node.storyContent.includes(e.newText))
+  const strikes = (node.strikethroughs ?? []).filter(st => node.storyContent.includes(st.text))
+  const hasAnnotations = visibleEdits.length > 0 || strikes.length > 0
 
   const wordCount = node.storyContent.replace(/\s/g, '').length
   const target = node.targetWordCount
@@ -140,33 +288,47 @@ export default function StoryPanel({ nodeId, isStreaming }: Props) {
 
       {/* Scrollable story area */}
       <div className="flex-1 overflow-y-auto px-6 sm:px-10 py-6" style={{ position: 'relative' }}>
-        <textarea
-          id="story-textarea"
-          ref={textareaRef}
-          {...(isStreaming ? {} : { value: node.storyContent })}
-          onChange={(e) => updateStoryContent(nodeId, e.target.value)}
-          className={`story-text w-full${isStreaming ? ' cursor-blink' : ''}`}
-          placeholder="这里是故事正文。在右侧对话栏输入创作指令，AI 将实时生成内容…"
-          spellCheck={false}
-          readOnly={isStreaming}
-          style={{
-            overflow: 'hidden',
-            resize: 'none',
-            minHeight: '200px',
-            fontSize: `${editorFontSize}px`,
-            lineHeight: editorLineHeight,
-            letterSpacing: `${editorLetterSpacing}em`,
-          }}
-        />
-        <FloatingEditButton textareaRef={textareaRef} nodeId={nodeId} disabled={isStreaming} />
-        <RevisionOverlay
-          textareaRef={textareaRef}
-          nodeId={nodeId}
-          editorFontSize={editorFontSize}
-          editorLineHeight={editorLineHeight}
-          editorLetterSpacing={editorLetterSpacing}
-          isStreaming={isStreaming}
-        />
+        {hasAnnotations && showDiffs && !isStreaming ? (
+          <DiffView
+            nodeId={nodeId}
+            content={node.storyContent}
+            edits={allEdits}
+            strikes={strikes}
+            fontSize={editorFontSize}
+            lineHeight={editorLineHeight}
+            letterSpacing={editorLetterSpacing}
+          />
+        ) : (
+          <>
+            <textarea
+              id="story-textarea"
+              ref={textareaRef}
+              {...(isStreaming ? {} : { value: node.storyContent })}
+              onChange={(e) => updateStoryContent(nodeId, e.target.value)}
+              className={`story-text w-full${isStreaming ? ' cursor-blink' : ''}`}
+              placeholder="这里是故事正文。在右侧对话栏输入创作指令，AI 将实时生成内容…"
+              spellCheck={false}
+              readOnly={isStreaming}
+              style={{
+                overflow: 'hidden',
+                resize: 'none',
+                minHeight: '200px',
+                fontSize: `${editorFontSize}px`,
+                lineHeight: editorLineHeight,
+                letterSpacing: `${editorLetterSpacing}em`,
+              }}
+            />
+            <FloatingEditButton textareaRef={textareaRef} nodeId={nodeId} disabled={isStreaming} />
+            <RevisionOverlay
+              textareaRef={textareaRef}
+              nodeId={nodeId}
+              editorFontSize={editorFontSize}
+              editorLineHeight={editorLineHeight}
+              editorLetterSpacing={editorLetterSpacing}
+              isStreaming={isStreaming}
+            />
+          </>
+        )}
       </div>
 
       {/* Footer stats — wraps on narrow widths */}
@@ -207,6 +369,46 @@ export default function StoryPanel({ nodeId, isStreaming }: Props) {
         {/* Right: generating indicator + typography button + target button */}
         {isStreaming && (
           <span className="generating-pulse flex-shrink-0" style={{ color: 'var(--gold)' }}>正在生成…</span>
+        )}
+
+        {/* Diff / strikethrough controls */}
+        {!isStreaming && (hasAnnotations || dismissedEdits.length > 0) && (
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <button
+              onClick={() => setShowDiffs(!showDiffs)}
+              className="text-xs px-2 py-0.5 rounded transition-all"
+              style={{
+                background: showDiffs ? 'rgba(80,180,120,0.12)' : 'transparent',
+                border: `1px solid ${showDiffs ? 'rgba(80,180,120,0.3)' : 'var(--border-subtle)'}`,
+                color: showDiffs ? 'rgba(80,180,120,0.9)' : 'var(--text-muted)',
+                fontSize: '10px',
+              }}>
+              {showDiffs ? '编辑模式' : `显示标记(${visibleEdits.length + strikes.length})`}
+            </button>
+            {dismissedEdits.length > 0 && (
+              <button
+                onClick={() => dismissedEdits.forEach(e => undismissStoryEdit(nodeId, e.id))}
+                className="text-xs px-2 py-0.5 rounded transition-all hover:opacity-80"
+                style={{ border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: '10px' }}>
+                恢复隐藏({dismissedEdits.length})
+              </button>
+            )}
+          </div>
+        )}
+        {!isStreaming && !showDiffs && (
+          <button
+            onClick={() => {
+              const el = textareaRef.current
+              if (!el) return
+              const sel = el.value.substring(el.selectionStart, el.selectionEnd)
+              if (!sel.trim()) return
+              addStrikethrough(nodeId, { id: genId(), text: sel, timestamp: Date.now() })
+              setShowDiffs(true)
+            }}
+            className="text-xs px-2 py-0.5 rounded transition-all hover:opacity-80 flex-shrink-0"
+            style={{ border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: '10px' }}>
+            划掉选中
+          </button>
         )}
 
         {/* Typography settings */}

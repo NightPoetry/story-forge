@@ -60,6 +60,23 @@ export interface TrashedNodeGroup {
   title: string
 }
 
+// ── Story Edits (targeted inline edits by AI) ───────────────────────────
+
+export interface StoryEdit {
+  id: string
+  oldText: string
+  newText: string
+  timestamp: number
+  trigger: string
+  dismissed?: boolean
+}
+
+export interface Strikethrough {
+  id: string
+  text: string
+  timestamp: number
+}
+
 // ── Inline Revisions ─────────────────────────────────────────────────────
 
 export interface RevisionSnapshot {
@@ -95,6 +112,8 @@ export interface StoryNodeData {
   foreshadowingCounter: number
   revisionPoints?: RevisionPoint[]
   forwardForeshadowing?: ForwardForeshadowingReport
+  editHistory?: StoryEdit[]
+  strikethroughs?: Strikethrough[]
 }
 
 // ── Character Cards ──────────────────────────────────────────────────────

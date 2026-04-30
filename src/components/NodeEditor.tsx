@@ -33,7 +33,9 @@ export default function NodeEditor({ nodeId, isDirty, onManualSave }: Props) {
   }
 
   const handleBranch = () => {
-    const newId = branchNode(nodeId)
+    // 派生始终创建兄弟节点（横向），根节点除外
+    const branchFrom = node.parentId ?? nodeId
+    const newId = branchNode(branchFrom)
     setEditingNode(newId)
   }
 

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { ApiFormat, BranchType, CharacterCard, CharacterEvent, ChatMessage, ForeshadowingItem, ForwardForeshadowingReport, FullProjectData, RevisionPoint, RevisionSnapshot, StateCardData, StoryNodeData, ToolStreamMode, TrashedNodeGroup } from './types'
+import { ApiFormat, BranchType, CharacterCard, CharacterEvent, ChatMessage, ForeshadowingItem, ForwardForeshadowingReport, FullProjectData, RevisionPoint, RevisionSnapshot, StateCardData, Strikethrough, StoryEdit, StoryNodeData, ToolStreamMode, TrashedNodeGroup } from './types'
 import { genId } from './api'
 
 function makeNode(
@@ -80,6 +80,14 @@ interface AppStore {
   updateForeshadowing: (nodeId: string, id: string, data: Partial<ForeshadowingItem>) => void
   collectForeshadowing: (nodeId: string, id: string, revealNote: string) => void
   removeForeshadowing: (nodeId: string, id: string) => void
+
+  // Story edits (targeted inline edits)
+  addStoryEdit: (nodeId: string, edit: StoryEdit) => void
+  dismissStoryEdit: (nodeId: string, editId: string) => void
+  undismissStoryEdit: (nodeId: string, editId: string) => void
+  clearEditHistory: (nodeId: string) => void
+  addStrikethrough: (nodeId: string, st: Strikethrough) => void
+  removeStrikethrough: (nodeId: string, stId: string) => void
 
   // Forward foreshadowing
   updateForwardForeshadowing: (nodeId: string, report: ForwardForeshadowingReport) => void
@@ -307,6 +315,45 @@ export const useStore = create<AppStore>()(
             },
           },
         })),
+
+      addStoryEdit: (nodeId, edit) =>
+        set((s) => {
+          const node = s.nodes[nodeId]
+          if (!node) return s
+          return { nodes: { ...s.nodes, [nodeId]: { ...node, editHistory: [...(node.editHistory ?? []), edit] } } }
+        }),
+      dismissStoryEdit: (nodeId, editId) =>
+        set((s) => {
+          const node = s.nodes[nodeId]
+          if (!node) return s
+          const editHistory = (node.editHistory ?? []).map(e => e.id === editId ? { ...e, dismissed: true } : e)
+          return { nodes: { ...s.nodes, [nodeId]: { ...node, editHistory } } }
+        }),
+      undismissStoryEdit: (nodeId, editId) =>
+        set((s) => {
+          const node = s.nodes[nodeId]
+          if (!node) return s
+          const editHistory = (node.editHistory ?? []).map(e => e.id === editId ? { ...e, dismissed: false } : e)
+          return { nodes: { ...s.nodes, [nodeId]: { ...node, editHistory } } }
+        }),
+      clearEditHistory: (nodeId) =>
+        set((s) => {
+          const node = s.nodes[nodeId]
+          if (!node) return s
+          return { nodes: { ...s.nodes, [nodeId]: { ...node, editHistory: [] } } }
+        }),
+      addStrikethrough: (nodeId, st) =>
+        set((s) => {
+          const node = s.nodes[nodeId]
+          if (!node) return s
+          return { nodes: { ...s.nodes, [nodeId]: { ...node, strikethroughs: [...(node.strikethroughs ?? []), st] } } }
+        }),
+      removeStrikethrough: (nodeId, stId) =>
+        set((s) => {
+          const node = s.nodes[nodeId]
+          if (!node) return s
+          return { nodes: { ...s.nodes, [nodeId]: { ...node, strikethroughs: (node.strikethroughs ?? []).filter(st => st.id !== stId) } } }
+        }),
 
       updateForwardForeshadowing: (nodeId, report) =>
         set((s) => ({
