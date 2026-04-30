@@ -710,6 +710,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
             <div className="flex items-center gap-1.5 mb-2">
               <button
                 onClick={() => setFineTuneMode(!fineTuneMode)}
+                title="开启后 AI 仅修改你指出的部分，保留其余正文不变。关闭时 AI 可能重写整段内容。"
                 className="px-2 py-0.5 rounded transition-all"
                 style={{
                   background: fineTuneMode ? 'rgba(201,169,110,0.15)' : 'transparent',

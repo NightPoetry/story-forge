@@ -320,10 +320,15 @@ export default function WritingGuideModal({ onClose }: Props) {
               </div>
               {/* Mode toggle + node selector */}
               <div className="flex items-center gap-1 flex-wrap">
-                {(['current', 'full', 'intent'] as ContextMode[]).map(mode => (
+                {([
+                  { mode: 'current' as ContextMode, label: '微调', tip: '聚焦单个章节：AI 看到从根到选中节点的完整正文、对话历史和状态卡片' },
+                  { mode: 'full' as ContextMode, label: '全量', tip: '全局视野：AI 看到所有章节的正文和对话历史，适合整体性的设定调整' },
+                  { mode: 'intent' as ContextMode, label: '用户意图', tip: '不看正文，只收集你在各处发出的所有对话指令，AI 从中提炼你的创作意图来生成设定' },
+                ]).map(({ mode, label, tip }) => (
                   <button
                     key={mode}
                     onClick={() => setContextMode(mode)}
+                    title={tip}
                     className="text-xs px-2 py-0.5 rounded transition-all"
                     style={{
                       background: contextMode === mode ? 'rgba(80,160,80,0.12)' : 'transparent',
@@ -331,13 +336,14 @@ export default function WritingGuideModal({ onClose }: Props) {
                       color: contextMode === mode ? 'rgba(120,200,120,0.9)' : 'var(--text-muted)',
                       fontSize: '10px',
                     }}>
-                    {{ current: '微调', full: '全量', intent: '用户意图' }[mode]}
+                    {label}
                   </button>
                 ))}
                 {contextMode === 'current' && (
                   <select
                     value={focusNodeId}
                     onChange={(e) => setFocusNodeId(e.target.value)}
+                    title="选择 AI 聚焦的章节 — AI 将看到从根到此节点的完整正文链"
                     className="text-xs rounded outline-none flex-1 min-w-0"
                     style={{
                       background: 'var(--bg-elevated)',
@@ -354,14 +360,22 @@ export default function WritingGuideModal({ onClose }: Props) {
                   </select>
                 )}
               </div>
+              {/* Mode description */}
+              <p style={{ color: 'var(--text-muted)', fontSize: '9px', opacity: 0.6, marginTop: '4px', lineHeight: 1.5 }}>
+                {{ current: '聚焦选中章节的上下文，适合针对特定剧情调整设定',
+                   full: '包含所有章节正文和对话，适合全局设定梳理',
+                   intent: '从你的全部对话中提炼创作意图，可勾选附加章节正文参考',
+                }[contextMode]}
+              </p>
               {/* 用户意图模式：附加节点选择 */}
               {contextMode === 'intent' && allNodes.some(n => n.storyContent.trim()) && (
                 <div className="flex flex-wrap gap-1 mt-1.5" style={{ maxHeight: '52px', overflowY: 'auto' }}>
-                  <span style={{ color: 'var(--text-muted)', fontSize: '9px', lineHeight: '20px' }}>附加正文：</span>
+                  <span title="默认不看正文，勾选后 AI 额外参考这些章节的正文内容" style={{ color: 'var(--text-muted)', fontSize: '9px', lineHeight: '20px', cursor: 'help' }}>附加正文：</span>
                   {allNodes.filter(n => n.storyContent.trim()).map(n => (
                     <button
                       key={n.id}
                       onClick={() => toggleExtraNode(n.id)}
+                      title={`${extraNodeIds.has(n.id) ? '取消' : '添加'}「${n.title}」的正文作为参考`}
                       className="text-xs px-1.5 py-0 rounded transition-all"
                       style={{
                         background: extraNodeIds.has(n.id) ? 'rgba(201,169,110,0.15)' : 'transparent',

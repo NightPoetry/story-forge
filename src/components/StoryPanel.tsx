@@ -376,6 +376,7 @@ export default function StoryPanel({ nodeId, isStreaming }: Props) {
           <div className="flex items-center gap-1.5 flex-shrink-0">
             <button
               onClick={() => setShowDiffs(!showDiffs)}
+              title={showDiffs ? '切换到编辑模式，可以直接修改正文' : '查看 AI 的修改标记：删除线=旧文本，绿色=新文本'}
               className="text-xs px-2 py-0.5 rounded transition-all"
               style={{
                 background: showDiffs ? 'rgba(80,180,120,0.12)' : 'transparent',
@@ -388,6 +389,7 @@ export default function StoryPanel({ nodeId, isStreaming }: Props) {
             {dismissedEdits.length > 0 && (
               <button
                 onClick={() => dismissedEdits.forEach(e => undismissStoryEdit(nodeId, e.id))}
+                title="重新显示之前隐藏的修改标记"
                 className="text-xs px-2 py-0.5 rounded transition-all hover:opacity-80"
                 style={{ border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: '10px' }}>
                 恢复隐藏({dismissedEdits.length})
@@ -405,6 +407,7 @@ export default function StoryPanel({ nodeId, isStreaming }: Props) {
               addStrikethrough(nodeId, { id: genId(), text: sel, timestamp: Date.now() })
               setShowDiffs(true)
             }}
+            title="先在正文中选中文本，点击此按钮将其标记为划掉 — 划掉的文本不会发送给 AI"
             className="text-xs px-2 py-0.5 rounded transition-all hover:opacity-80 flex-shrink-0"
             style={{ border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: '10px' }}>
             划掉选中
