@@ -7,7 +7,7 @@ import CreateProjectModal from './CreateProjectModal'
 import BulkExportModal from './BulkExportModal'
 
 export default function ProjectsPage() {
-  const { projects, openProject, deleteProject, restoreProject, permanentDeleteProject, importProjects, isLoading } = useProjectStore()
+  const { projects, verifyProjectAccess, activateProject, deleteProject, restoreProject, permanentDeleteProject, importProjects, isLoading } = useProjectStore()
   const { resetWithProjectData, initRootNode } = useStore()
 
   const [unlocking, setUnlocking] = useState<ProjectMeta | null>(null)
@@ -45,11 +45,12 @@ export default function ProjectsPage() {
   }
 
   const doOpen = async (id: string, password?: string) => {
-    const res = await openProject(id, password)
+    const res = await verifyProjectAccess(id, password)
     if (res === 'wrong-password') {
       setUnlockErr('密码错误，请重试')
       return
     }
+    if (res === 'needs-password') return
     const data = await readProjectData(id)
     if (data && Object.keys(data.nodes).length > 0) {
       // Migrate: ensure each node has foreshadowings field; old saves stored them at project level
@@ -75,6 +76,7 @@ export default function ProjectsPage() {
       resetWithProjectData({}, null, '', '', [], [], [])
       initRootNode()
     }
+    activateProject(id)
     setUnlocking(null)
   }
 

@@ -163,6 +163,8 @@ function RevisionModal({
     return () => window.removeEventListener('keydown', handleKey)
   }, [onClose, generating])
 
+  useEffect(() => () => { abortRef.current?.abort() }, [])
+
   const handleApply = () => {
     if (editText === originalText) { onClose(); return }
     if (!node) return

@@ -268,6 +268,8 @@ function ForeshadowingEditModal({
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [chatHistory])
 
+  useEffect(() => () => { abortRef.current?.abort() }, [])
+
   const handleSave = () => {
     onUpdate(item.id, { secret, plantNote, ...(isCollected ? { revealNote } : {}) })
   }

@@ -60,6 +60,8 @@ interface AppStore {
   editorLetterSpacing: number
   soundEnabled: boolean
   toolStreamMode: ToolStreamMode
+  temperature: number
+  temperatureLocked: boolean
 
   // Story actions
   resetWithProjectData: (nodes: Record<string, StoryNodeData>, rootNodeId: string | null, writingGuide?: string, aiWritingRules?: string, writingGuideChatHistory?: ChatMessage[], trashedNodes?: TrashedNodeGroup[], characterCards?: CharacterCard[]) => void
@@ -96,6 +98,7 @@ interface AppStore {
   addCharacterCard: (name: string) => string
   updateCharacterCard: (id: string, data: Partial<Omit<CharacterCard, 'id' | 'events' | 'createdAt'>>) => void
   removeCharacterCard: (id: string) => void
+  setCharacterCards: (cards: CharacterCard[]) => void
   addCharacterEvent: (charId: string, event: Omit<CharacterEvent, 'id' | 'timestamp'>) => void
   removeCharacterEvent: (charId: string, eventId: string) => void
 
@@ -128,6 +131,8 @@ interface AppStore {
   setEditorLetterSpacing: (v: number) => void
   setSoundEnabled: (v: boolean) => void
   setToolStreamMode: (v: ToolStreamMode) => void
+  setTemperature: (v: number) => void
+  setTemperatureLocked: (v: boolean) => void
 
   // Helpers
   getAncestorChain: (nodeId: string) => StoryNodeData[]
@@ -167,6 +172,8 @@ export const useStore = create<AppStore>()(
       editorLetterSpacing: 0.01,
       soundEnabled: true,
       toolStreamMode: 'streaming' as ToolStreamMode,
+      temperature: 0.7,
+      temperatureLocked: true,
 
       resetWithProjectData: (nodes, rootNodeId, writingGuide = '', aiWritingRules = '', writingGuideChatHistory = [], trashedNodes = [], characterCards = []) =>
         set({ nodes, rootNodeId, selectedNodeId: rootNodeId, editingNodeId: null, isGenerating: false, projectWritingGuide: writingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes, characterCards, undoStack: [], redoStack: [] }),
@@ -234,29 +241,29 @@ export const useStore = create<AppStore>()(
       },
 
       updateNodeTitle: (nodeId, title) =>
-        set((s) => ({ nodes: { ...s.nodes, [nodeId]: { ...s.nodes[nodeId], title } } })),
+        set((s) => s.nodes[nodeId] ? { nodes: { ...s.nodes, [nodeId]: { ...s.nodes[nodeId], title } } } : s),
 
       updateStoryContent: (nodeId, content) =>
-        set((s) => ({ nodes: { ...s.nodes, [nodeId]: { ...s.nodes[nodeId], storyContent: content } } })),
+        set((s) => s.nodes[nodeId] ? { nodes: { ...s.nodes, [nodeId]: { ...s.nodes[nodeId], storyContent: content } } } : s),
 
       updateTargetWordCount: (nodeId, count) =>
-        set((s) => ({ nodes: { ...s.nodes, [nodeId]: { ...s.nodes[nodeId], targetWordCount: count } } })),
+        set((s) => s.nodes[nodeId] ? { nodes: { ...s.nodes, [nodeId]: { ...s.nodes[nodeId], targetWordCount: count } } } : s),
 
       addChatMessage: (nodeId, msg) =>
-        set((s) => ({
+        set((s) => s.nodes[nodeId] ? {
           nodes: {
             ...s.nodes,
             [nodeId]: { ...s.nodes[nodeId], chatHistory: [...s.nodes[nodeId].chatHistory, msg] },
           },
-        })),
+        } : s),
 
       updateStateCard: (nodeId, data) =>
-        set((s) => ({
+        set((s) => s.nodes[nodeId] ? {
           nodes: {
             ...s.nodes,
             [nodeId]: { ...s.nodes[nodeId], stateCard: { ...s.nodes[nodeId].stateCard, ...data } },
           },
-        })),
+        } : s),
 
       setSelectedNode: (id) => set({ selectedNodeId: id }),
       setEditingNode: (id) => set({ editingNodeId: id }),
@@ -282,7 +289,7 @@ export const useStore = create<AppStore>()(
       },
 
       updateForeshadowing: (nodeId, id, data) =>
-        set((s) => ({
+        set((s) => s.nodes[nodeId] ? {
           nodes: {
             ...s.nodes,
             [nodeId]: {
@@ -290,10 +297,10 @@ export const useStore = create<AppStore>()(
               foreshadowings: s.nodes[nodeId].foreshadowings.map((f) => f.id === id ? { ...f, ...data } : f),
             },
           },
-        })),
+        } : s),
 
       collectForeshadowing: (nodeId, id, revealNote) =>
-        set((s) => ({
+        set((s) => s.nodes[nodeId] ? {
           nodes: {
             ...s.nodes,
             [nodeId]: {
@@ -303,10 +310,10 @@ export const useStore = create<AppStore>()(
               ),
             },
           },
-        })),
+        } : s),
 
       removeForeshadowing: (nodeId, id) =>
-        set((s) => ({
+        set((s) => s.nodes[nodeId] ? {
           nodes: {
             ...s.nodes,
             [nodeId]: {
@@ -314,7 +321,7 @@ export const useStore = create<AppStore>()(
               foreshadowings: s.nodes[nodeId].foreshadowings.filter((f) => f.id !== id),
             },
           },
-        })),
+        } : s),
 
       addStoryEdit: (nodeId, edit) =>
         set((s) => {
@@ -356,12 +363,12 @@ export const useStore = create<AppStore>()(
         }),
 
       updateForwardForeshadowing: (nodeId, report) =>
-        set((s) => ({
+        set((s) => s.nodes[nodeId] ? {
           nodes: {
             ...s.nodes,
             [nodeId]: { ...s.nodes[nodeId], forwardForeshadowing: report },
           },
-        })),
+        } : s),
 
       // Character cards
       addCharacterCard: (name) => {
@@ -375,6 +382,7 @@ export const useStore = create<AppStore>()(
         set((s) => ({ characterCards: s.characterCards.map((c) => c.id === id ? { ...c, ...data, updatedAt: Date.now() } : c) })),
       removeCharacterCard: (id) =>
         set((s) => ({ characterCards: s.characterCards.filter((c) => c.id !== id) })),
+      setCharacterCards: (cards) => set({ characterCards: cards }),
       addCharacterEvent: (charId, event) => {
         const ev: CharacterEvent = { ...event, id: genId(), timestamp: Date.now() }
         set((s) => ({ characterCards: s.characterCards.map((c) => c.id === charId ? { ...c, events: [...c.events, ev], updatedAt: Date.now() } : c) }))
@@ -439,9 +447,9 @@ export const useStore = create<AppStore>()(
       },
 
       removeRevisionPoint: (nodeId, rpId) => {
-        set((s) => ({
+        set((s) => s.nodes[nodeId] ? {
           nodes: { ...s.nodes, [nodeId]: { ...s.nodes[nodeId], revisionPoints: (s.nodes[nodeId].revisionPoints ?? []).filter(r => r.id !== rpId) } },
-        }))
+        } : s)
       },
 
       setGlobalSettings: (content) => set({ globalSettings: content }),
@@ -522,6 +530,8 @@ export const useStore = create<AppStore>()(
       setEditorLetterSpacing: (v) => set({ editorLetterSpacing: v }),
       setSoundEnabled: (v) => set({ soundEnabled: v }),
       setToolStreamMode: (v) => set({ toolStreamMode: v }),
+      setTemperature: (v) => set({ temperature: v }),
+      setTemperatureLocked: (v) => set({ temperatureLocked: v }),
 
       getAncestorChain: (nodeId) => {
         const nodes = get().nodes
@@ -563,6 +573,8 @@ export const useStore = create<AppStore>()(
         autoSave: s.autoSave,
         soundEnabled: s.soundEnabled,
         toolStreamMode: s.toolStreamMode,
+        temperature: s.temperature,
+        temperatureLocked: s.temperatureLocked,
       }),
     },
   ),

@@ -1,6 +1,6 @@
 [package]
 name = "narrative-forge"
-version = "2.5.0"
+version = "2.6.1"
 description = "叙事工坊 — AI Short Story Generator"
 authors = []
 license = ""

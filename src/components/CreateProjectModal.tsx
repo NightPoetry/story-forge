@@ -7,7 +7,7 @@ interface Props {
 }
 
 export default function CreateProjectModal({ onClose }: Props) {
-  const { createProject, openProject } = useProjectStore()
+  const { createProject, activateProject } = useProjectStore()
   const { resetWithProjectData, initRootNode } = useStore()
   const [name, setName] = useState('')
   const [usePassword, setUsePassword] = useState(false)
@@ -26,9 +26,9 @@ export default function CreateProjectModal({ onClose }: Props) {
     }
     setCreating(true)
     const id = await createProject(name.trim(), usePassword ? pw : undefined)
-    await openProject(id)
     resetWithProjectData({}, null)
     initRootNode()
+    activateProject(id)
     setCreating(false)
     onClose()
   }

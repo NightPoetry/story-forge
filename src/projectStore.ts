@@ -22,6 +22,8 @@ interface ProjectStore {
   loadProjects: () => Promise<void>
   createProject: (name: string, password?: string) => Promise<string>
   openProject: (id: string, password?: string) => Promise<'ok' | 'wrong-password' | 'needs-password'>
+  verifyProjectAccess: (id: string, password?: string) => Promise<'ok' | 'wrong-password' | 'needs-password'>
+  activateProject: (id: string) => void
   closeProject: () => Promise<void>
   deleteProject: (id: string) => Promise<void>
   restoreProject: (id: string) => Promise<void>
@@ -72,18 +74,25 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
     return id
   },
 
-  openProject: async (id, password) => {
+  verifyProjectAccess: async (id, password) => {
     const meta = get().projects.find((p) => p.id === id)
     if (!meta) return 'ok'
-
     if (meta.passwordHash) {
       if (!password) return 'needs-password'
       const ok = await verifyPassword(password, meta.passwordHash)
       if (!ok) return 'wrong-password'
     }
-
-    set({ currentProjectId: id, view: 'editor' })
     return 'ok'
+  },
+
+  activateProject: (id) => {
+    set({ currentProjectId: id, view: 'editor' })
+  },
+
+  openProject: async (id, password) => {
+    const res = await get().verifyProjectAccess(id, password)
+    if (res === 'ok') set({ currentProjectId: id, view: 'editor' })
+    return res
   },
 
   closeProject: async () => {

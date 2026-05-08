@@ -19,9 +19,11 @@ export default function App() {
   const {
     apiKey, apiUrl, apiFormat, apiModel,
     setApiKey, setApiUrl, setApiFormat, setApiModel, setToolStreamMode,
+    temperature, temperatureLocked, setTemperature, setTemperatureLocked,
     nodes, rootNodeId, editingNodeId,
     projectWritingGuide, aiWritingRules, writingGuideChatHistory,
     trashedNodes, characterCards, autoSave, undo, redo,
+    resetWithProjectData,
   } = useStore()
 
   const { init, view, currentProjectId, saveProjectData, closeProject } = useProjectStore()
@@ -69,6 +71,7 @@ export default function App() {
       await saveProjectData(currentProjectId, nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes, characterCards)
       setIsDirty(false)
     }
+    resetWithProjectData({}, null)
     await closeProject()
   }, [currentProjectId, nodes, rootNodeId, projectWritingGuide, aiWritingRules, writingGuideChatHistory, trashedNodes, characterCards])
 
@@ -270,6 +273,53 @@ export default function App() {
                     placeholder={FORMAT_DEFAULTS[form.format].model}
                     className="w-full px-3 py-2.5 rounded text-sm outline-none"
                     style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '12px' }} />
+                </div>
+                {/* Temperature */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs" style={{ color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', fontSize: '10px' }}>
+                      温度 (Temperature)
+                    </label>
+                    <button
+                      onClick={() => setTemperatureLocked(!temperatureLocked)}
+                      title={temperatureLocked ? '已锁定：使用固定温度' : '已解锁：AI 根据内容自动选择温度'}
+                      className="flex items-center gap-1 px-1.5 py-0.5 rounded transition-all hover:opacity-80"
+                      style={{
+                        background: temperatureLocked ? 'rgba(201,169,110,0.12)' : 'rgba(80,160,80,0.1)',
+                        border: `1px solid ${temperatureLocked ? 'var(--border-gold)' : 'rgba(80,160,80,0.3)'}`,
+                        color: temperatureLocked ? 'var(--gold)' : 'rgba(80,160,80,0.9)',
+                        fontSize: '10px',
+                      }}>
+                      <svg width="10" height="10" viewBox="0 0 16 16" fill="none">
+                        {temperatureLocked ? (
+                          <path d="M4 7V5a4 4 0 118 0v2m-9 0h10a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1V8a1 1 0 011-1z"
+                            stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                        ) : (
+                          <path d="M10 7V5a4 4 0 00-7.9-.7M3 7h10a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1V8a1 1 0 011-1z"
+                            stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                        )}
+                      </svg>
+                      {temperatureLocked ? '锁定' : 'AI 自决'}
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range" min="0" max="1" step="0.05"
+                      value={temperature}
+                      onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                      disabled={!temperatureLocked}
+                      className="flex-1"
+                      style={{ accentColor: 'var(--gold)', opacity: temperatureLocked ? 1 : 0.4 }}
+                    />
+                    <span className="text-sm font-mono w-8 text-right" style={{ color: temperatureLocked ? 'var(--text-primary)' : 'var(--text-muted)', fontSize: '12px' }}>
+                      {temperature.toFixed(2)}
+                    </span>
+                  </div>
+                  <p className="text-xs mt-1.5" style={{ color: 'var(--text-muted)', fontSize: '10px', opacity: 0.7 }}>
+                    {temperatureLocked
+                      ? '低温(0.3-0.5)逻辑严密 · 中温(0.6-0.8)平衡 · 高温(0.8-1.0)创意发散'
+                      : 'AI 会根据你的请求自动判断所需温度，如发现逻辑不通会自动降温'}
+                  </p>
                 </div>
               </div>
 

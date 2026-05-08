@@ -368,6 +368,19 @@ const REPORT_FORWARD_FORESHADOWING_TOOL = {
   },
 } as const
 
+const SET_TEMPERATURE_TOOL = {
+  name: 'set_temperature',
+  description: '根据用户请求的性质选择本次生成的温度(temperature)。逻辑性要求高（推理、悬疑、因果关系严密）→ 低温(0.3-0.5)；普通叙事 → 中温(0.6-0.8)；需要创意发散（诗意、意识流、头脑风暴）→ 高温(0.8-1.0)。当用户抱怨逻辑不通或内容重复时，应主动降温。',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      value: { type: 'number', description: '温度值，范围 0.0-1.0' },
+      reason: { type: 'string', description: '简要说明为何选择这个温度' },
+    },
+    required: ['value', 'reason'],
+  },
+} as const
+
 const TOOL_GUIDANCE = `你是专业故事创作助手。根据用户指令，调用合适的工具：
 - 用户要写/续写故事情节，或需要大幅重写 → 调用 write_story
 - 用户要求修改特定段落、句子、措辞或细节（局部调整） → 调用 edit_story（精准替换，不影响其余正文）
@@ -438,6 +451,7 @@ export type AIAction =
   | { type: 'report_forward_foreshadowing'; used: { detail: string; source: string; usage: string }[]; candidates: { detail: string; source: string; potential: string }[] }
   | { type: 'update_characters'; updates: { name: string; baseInfo?: string; personality?: string; speechStyle?: string; event: string; changes: string }[] }
   | { type: 'edit_story'; edits: { oldText: string; newText: string }[] }
+  | { type: 'set_temperature'; value: number; reason: string }
 
 export type AIGuideAction =
   | { type: 'update_guide'; content: string }
@@ -450,6 +464,7 @@ interface ApiConfig {
   apiUrl: string
   apiFormat: ApiFormat
   apiModel: string
+  temperature?: number
 }
 
 function anthropicHeaders(apiKey: string) {
@@ -610,6 +625,7 @@ export async function runIntelligentGeneration(
     UPDATE_CHARACTERS_TOOL,
     ADD_FORESHADOWING_TOOL,
     REPORT_FORWARD_FORESHADOWING_TOOL,
+    SET_TEMPERATURE_TOOL,
     ...(hasActiveForeshadowings ? [COLLECT_FORESHADOWING_TOOL] : []),
   ].filter(t => !exclude.has(t.name)) as unknown as ToolDef[]
 
@@ -654,7 +670,7 @@ async function runAnthropicStreamingToolUse(
     result = await postSSE(
       `${base}/v1/messages`,
       anthropicHeaders(cfg.apiKey),
-      { model: cfg.apiModel, max_tokens: 4096, stream: true, system: systemPrompt, messages, tools },
+      { model: cfg.apiModel, max_tokens: 4096, stream: true, system: systemPrompt, messages, tools, ...(cfg.temperature !== undefined && { temperature: cfg.temperature }) },
       (raw) => {
         let evt: Record<string, unknown>
         try { evt = JSON.parse(raw) as Record<string, unknown> } catch { return }
@@ -768,6 +784,7 @@ async function runOpenAIToolUse(
         model: cfg.apiModel, stream: true,
         messages: [{ role: 'system', content: systemPrompt }, ...messages],
         tools: openAITools, tool_choice: 'required',
+        ...(cfg.temperature !== undefined && { temperature: cfg.temperature }),
       },
       (raw) => {
         let evt: Record<string, unknown>
@@ -1009,6 +1026,7 @@ async function runOpenAIPlainFallback(
       {
         model: cfg.apiModel, stream: true,
         messages: [{ role: 'system', content: systemPrompt + PLAIN_OUTPUT_INSTRUCTIONS }, ...messages],
+        ...(cfg.temperature !== undefined && { temperature: cfg.temperature }),
       },
       (raw) => {
         try {
@@ -1148,7 +1166,7 @@ export async function runSettingsGuideChat(
       result = await postSSE(
         `${base}/v1/messages`,
         anthropicHeaders(cfg.apiKey),
-        { model: cfg.apiModel, max_tokens: 2048, stream: true, system: systemPrompt, messages, tools },
+        { model: cfg.apiModel, max_tokens: 2048, stream: true, system: systemPrompt, messages, tools, ...(cfg.temperature !== undefined && { temperature: cfg.temperature }) },
         (raw) => {
           let evt: Record<string, unknown>
           try { evt = JSON.parse(raw) as Record<string, unknown> } catch { return }
@@ -1203,7 +1221,7 @@ export async function runSettingsGuideChat(
       result = await postSSE(
         `${base}/chat/completions`,
         openaiHeaders(cfg.apiKey),
-        { model: cfg.apiModel, stream: true, messages: [{ role: 'system', content: systemPrompt }, ...messages], tools: openAITools, tool_choice: 'auto' },
+        { model: cfg.apiModel, stream: true, messages: [{ role: 'system', content: systemPrompt }, ...messages], tools: openAITools, tool_choice: 'auto', ...(cfg.temperature !== undefined && { temperature: cfg.temperature }) },
         (raw) => {
           let evt: Record<string, unknown>
           try { evt = JSON.parse(raw) as Record<string, unknown> } catch { return }
@@ -1274,6 +1292,7 @@ export async function streamGeneration(
           stream: true,
           system: systemPrompt,
           messages: msgs,
+          ...(cfg.temperature !== undefined && { temperature: cfg.temperature }),
         }),
       })
     } catch (e) {
@@ -1320,6 +1339,7 @@ export async function streamGeneration(
           model: cfg.apiModel,
           stream: true,
           messages: [{ role: 'system', content: systemPrompt }, ...msgs],
+          ...(cfg.temperature !== undefined && { temperature: cfg.temperature }),
         }),
       })
     } catch (e) {
@@ -1603,7 +1623,7 @@ export async function runAutoInit(
         await postSSE(
           `${base}/v1/messages`,
           anthropicHeaders(cfg.apiKey),
-          { model: cfg.apiModel, max_tokens: 2048, stream: true, messages, tools },
+          { model: cfg.apiModel, max_tokens: 2048, stream: true, messages, tools, ...(cfg.temperature !== undefined && { temperature: cfg.temperature }) },
           (raw) => {
             let evt: Record<string, unknown>
             try { evt = JSON.parse(raw) as Record<string, unknown> } catch { return }
@@ -1632,7 +1652,7 @@ export async function runAutoInit(
         const res = await doFetch(`${base}/chat/completions`, {
           method: 'POST',
           headers: openaiHeaders(cfg.apiKey),
-          body: JSON.stringify({ model: cfg.apiModel, messages, tools: openAITools, tool_choice: 'required' }),
+          body: JSON.stringify({ model: cfg.apiModel, messages, tools: openAITools, tool_choice: 'required', ...(cfg.temperature !== undefined && { temperature: cfg.temperature }) }),
           signal,
         })
         dlog.info('auto-init', `response: ${res.status} ok=${res.ok}`)

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { buildFixedSystemPrompt, buildDynamicContext, runIntelligentGeneration, runAutoInit, genId, AIAction } from '../api'
 import { dlog } from '../debugLog'
-import { ChatMessage } from '../types'
+import { ChatMessage, CharacterCard } from '../types'
 import StateCard from './StateCard'
 import ForeshadowingPanel from './ForeshadowingPanel'
 import CharacterPanel from './CharacterPanel'
@@ -51,12 +51,14 @@ function buildActionSummary(actions: AIAction[]): string[] {
       lines.push(`新增 ${a.items.length} 条伏笔`)
     } else if (a.type === 'collect_foreshadowing') {
       lines.push(`回收伏笔 ${a.id}`)
+    } else if (a.type === 'update_characters') {
+      lines.push(`更新 ${a.updates.length} 个人物卡片`)
     }
   }
   return lines
 }
 
-const MODIFYING_ACTIONS = new Set(['write_story', 'update_state_card', 'update_writing_rules', 'add_foreshadowings', 'collect_foreshadowing'])
+const MODIFYING_ACTIONS = new Set(['write_story', 'update_state_card', 'update_writing_rules', 'add_foreshadowings', 'collect_foreshadowing', 'update_characters'])
 
 const TOOL_LABELS: Record<string, string> = {
   __reasoning__: '思考中…',
@@ -69,6 +71,7 @@ const TOOL_LABELS: Record<string, string> = {
   report_forward_foreshadowing: '分析正伏笔…',
   update_characters: '更新人物卡片…',
   edit_story: '正在修改正文…',
+  set_temperature: '调整创作参数…',
 }
 
 function playDoneSound() {
@@ -94,13 +97,14 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     nodes, addChatMessage, updateStoryContent, updateStateCard,
     getAncestorChain, globalSettings, projectWritingGuide, aiWritingRules,
     apiKey, apiUrl, apiFormat, apiModel, toolStreamMode,
+    temperature, temperatureLocked,
     isGenerating, setIsGenerating,
     collectForeshadowing, addForeshadowing, pushUndoSnapshot,
     soundEnabled, setSoundEnabled,
     updateForwardForeshadowing, setAiWritingRules,
     undo, undoStack, characterCards,
     addCharacterCard, updateCharacterCard, addCharacterEvent,
-    addStoryEdit,
+    addStoryEdit, setCharacterCards,
   } = useStore()
 
   const node = nodes[nodeId]
@@ -116,17 +120,36 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
   const streamRafRef = useRef<number>(0)
   const pendingStreamRef = useRef<{ story?: string; stateCard?: string }>({})
   const typewriterRef = useRef<{ timer: ReturnType<typeof setTimeout>; full: string; pos: number } | null>(null)
-  const cfg = { apiKey, apiUrl, apiFormat, apiModel }
+  const cfg = { apiKey, apiUrl, apiFormat, apiModel, temperature: temperatureLocked ? temperature : undefined }
+  const [messageQueue, setMessageQueue] = useState<{ id: string; text: string }[]>([])
+  const characterSnapshotRef = useRef<CharacterCard[]>([])
+  const aiWritingRulesSnapshotRef = useRef('')
+  const fineTuneModeRef = useRef(fineTuneMode)
+  fineTuneModeRef.current = fineTuneMode
+  const aiChosenTempRef = useRef<number | undefined>(undefined)
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [node?.chatHistory, stage])
 
   useEffect(() => {
+    abortControllerRef.current?.abort()
+    if (typewriterRef.current) { clearTimeout(typewriterRef.current.timer); typewriterRef.current = null }
+    if (streamRafRef.current) { cancelAnimationFrame(streamRafRef.current); streamRafRef.current = 0 }
     setPendingConfirm(null)
     performedActionsRef.current = []
     pendingStoryRef.current = null
+    setMessageQueue([])
+    setIsGenerating(false)
   }, [nodeId])
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort()
+      if (typewriterRef.current) { clearTimeout(typewriterRef.current.timer); typewriterRef.current = null }
+      if (streamRafRef.current) { cancelAnimationFrame(streamRafRef.current); streamRafRef.current = 0 }
+    }
+  }, [])
 
   if (!node) return null
 
@@ -162,8 +185,13 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
 
     pushUndoSnapshot()
 
+    const phase2Cfg = aiChosenTempRef.current !== undefined
+      ? { ...cfg, temperature: aiChosenTempRef.current }
+      : cfg
+    aiChosenTempRef.current = undefined
+
     await runIntelligentGeneration(
-      cfg, fixedSystem, msgs, hasActive,
+      phase2Cfg, fixedSystem, msgs, hasActive,
       (action) => {
         if (controller.signal.aborted) return
         if (action.type === 'write_story') updateStoryContent(nodeId, action.content)
@@ -235,6 +263,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
         }
         if (soundEnabled) playDoneSound()
         setStage(null); setIsGenerating(false); onStreamingChange(false)
+        processNextInQueue()
       },
       (err) => {
         if (typewriterRef.current) { clearTimeout(typewriterRef.current.timer); typewriterRef.current = null }
@@ -242,6 +271,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
         pendingStreamRef.current = {}
         addChatMessage(nodeId, { id: genId(), role: 'assistant', content: `生成失败：${err}`, timestamp: Date.now() })
         setStage(null); setIsGenerating(false); onStreamingChange(false)
+        processNextInQueue()
       },
       controller.signal,
       (toolName, text) => {
@@ -301,13 +331,11 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
         }
       },
       toolStreamMode,
+      ['set_temperature'],
     )
   }
 
-  const handleSend = async () => {
-    if (!input.trim() || isGenerating || !apiKey || pendingConfirm) return
-    const userText = input.trim()
-    setInput('')
+  const processMessage = async (userText: string) => {
     setActiveTab('chat')
 
     const userMsg: ChatMessage = {
@@ -316,8 +344,15 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     addChatMessage(nodeId, userMsg)
 
     pushUndoSnapshot()
-    const prevStoryContent = node.storyContent
-    const prevStateCard = { ...node.stateCard }
+
+    const s0 = useStore.getState()
+    const latestNode = s0.nodes[nodeId]
+    if (!latestNode) return
+
+    const prevStoryContent = latestNode.storyContent
+    const prevStateCard = { ...latestNode.stateCard }
+    characterSnapshotRef.current = JSON.parse(JSON.stringify(s0.characterCards))
+    aiWritingRulesSnapshotRef.current = s0.aiWritingRules
 
     const controller = new AbortController()
     abortControllerRef.current = controller
@@ -330,14 +365,16 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     let phase1ChatReply = ''
 
     const ancestors = getAncestorChain(nodeId)
-    const fixedSystem = buildFixedSystemPrompt(globalSettings)
-    const dynamicContext = buildDynamicContext(node, ancestors, projectWritingGuide, aiWritingRules, undefined, characterCards)
-    const hasActiveForeshadowings = foreshadowings.some((f) => f.status === 'planted')
+    const fixedSystem = buildFixedSystemPrompt(s0.globalSettings)
+    const dynamicContext = buildDynamicContext(latestNode, ancestors, s0.projectWritingGuide, s0.aiWritingRules, undefined, s0.characterCards)
+    const hasActiveForeshadowings = (latestNode.foreshadowings ?? []).some((f) => f.status === 'planted')
 
-    const prevMessages = node.chatHistory
+    const prevMessages = latestNode.chatHistory
+      .filter(m => m.id !== userMsg.id)
       .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
 
-    const fineTuneNote = fineTuneMode
+    const curFineTune = fineTuneModeRef.current
+    const fineTuneNote = curFineTune
       ? '\n\n【微调模式】仅对当前正文中需要修改的部分做最小化改动，不要重写整段或整章。'
       : ''
     const messages = [
@@ -348,7 +385,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     // Phase 1: setup-only pass (write_story excluded)
     await runIntelligentGeneration(
       cfg,
-      fixedSystem + '\n\n【本次调用限制】本次请求仅处理设定类操作（伏笔、状态卡片、写作规则等），不要输出故事正文。如果用户请求涉及写故事，请在 chat_reply 中简要说明你的创作计划即可。',
+      fixedSystem + '\n\n【本次调用限制】本次请求仅处理设定类操作，不要输出故事正文。请根据对话内容主动检查并更新：\n- 人物卡片：涉及角色时，创建或更新人物卡片\n- 状态卡片：情节或设定有变化时，更新状态卡片\n- 伏笔/写作规则：按需创建、回收或更新\n如果用户请求涉及写故事，请在 chat_reply 中简要说明你的创作计划即可。',
       messages,
       hasActiveForeshadowings,
       (action) => {
@@ -369,6 +406,28 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
         } else if (action.type === 'collect_foreshadowing') {
           performedActionsRef.current.push(action)
           collectForeshadowing(nodeId, action.id, action.revealNote)
+        } else if (action.type === 'update_characters') {
+          performedActionsRef.current.push(action)
+          const curCards = useStore.getState().characterCards
+          const nodeTitle = useStore.getState().nodes[nodeId]?.title ?? ''
+          for (const upd of action.updates) {
+            const existing = curCards.find((c) => c.name === upd.name)
+            if (existing) {
+              if (upd.baseInfo) updateCharacterCard(existing.id, { baseInfo: upd.baseInfo })
+              if (upd.personality) updateCharacterCard(existing.id, { personality: upd.personality })
+              if (upd.speechStyle) updateCharacterCard(existing.id, { speechStyle: upd.speechStyle })
+              addCharacterEvent(existing.id, { nodeTitle, description: upd.event, changes: upd.changes })
+            } else {
+              const newId = addCharacterCard(upd.name)
+              if (upd.baseInfo) updateCharacterCard(newId, { baseInfo: upd.baseInfo })
+              if (upd.personality) updateCharacterCard(newId, { personality: upd.personality })
+              if (upd.speechStyle) updateCharacterCard(newId, { speechStyle: upd.speechStyle })
+              addCharacterEvent(newId, { nodeTitle, description: upd.event, changes: upd.changes })
+            }
+          }
+        } else if (action.type === 'set_temperature') {
+          aiChosenTempRef.current = Math.max(0, Math.min(1, action.value))
+          dlog.info('chatpanel', `AI chose temperature: ${action.value} — ${action.reason}`)
         }
       },
       (toolName) => {
@@ -404,7 +463,6 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
 
         const setupActions = performedActionsRef.current
         if (setupActions.length > 0) {
-          // Setup changes happened — add chat_reply and show confirmation
           if (phase1ChatReply) {
             addChatMessage(nodeId, { id: genId(), role: 'assistant', content: phase1ChatReply, timestamp: Date.now() })
           }
@@ -414,8 +472,6 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
           const actionTypes = [...new Set(setupActions.map(a => a.type))]
           setPendingConfirm({ summary, actionTypes, hasPendingStory: true })
         } else {
-          // No setup changes — skip confirmation, go straight to full generation
-          // Don't add Phase 1 chat_reply (it's just noise like "好的我来写")
           setStage(null); setIsGenerating(false); onStreamingChange(false)
           await runFullGeneration(userText)
         }
@@ -426,8 +482,11 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
         pendingStreamRef.current = {}
         updateStoryContent(nodeId, prevStoryContent)
         updateStateCard(nodeId, prevStateCard)
+        setAiWritingRules(aiWritingRulesSnapshotRef.current)
+        setCharacterCards(characterSnapshotRef.current)
         addChatMessage(nodeId, { id: genId(), role: 'assistant', content: `生成失败：${err}`, timestamp: Date.now() })
         setStage(null); setIsGenerating(false); onStreamingChange(false)
+        processNextInQueue()
       },
       controller.signal,
       (toolName, text) => {
@@ -446,8 +505,28 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
         }
       },
       toolStreamMode,
-      ['write_story', 'edit_story', 'report_forward_foreshadowing'],
+      ['write_story', 'edit_story', 'report_forward_foreshadowing', ...(temperatureLocked ? ['set_temperature'] : [])],
     )
+  }
+
+  const processNextInQueue = () => {
+    setMessageQueue(prev => {
+      if (prev.length === 0) return prev
+      const [next, ...rest] = prev
+      setTimeout(() => processMessage(next.text), 50)
+      return rest
+    })
+  }
+
+  const handleSend = () => {
+    if (!input.trim() || !apiKey) return
+    const userText = input.trim()
+    setInput('')
+    if (isGenerating || !!pendingConfirm) {
+      setMessageQueue(prev => [...prev, { id: genId(), text: userText }])
+      return
+    }
+    processMessage(userText)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -485,6 +564,7 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
   const handleAbort = () => {
     abortControllerRef.current?.abort()
     flushPendingStream()
+    setMessageQueue([])
     setStage(null)
     setIsGenerating(false)
     onStreamingChange(false)
@@ -495,9 +575,11 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     setPendingConfirm(null)
     performedActionsRef.current = []
     pendingStoryRef.current = null
-    // Phase 2: generate with all tools, using confirmed setup context
     if (userText) {
+      setIsGenerating(true)
       await runFullGeneration(userText)
+    } else {
+      processNextInQueue()
     }
   }
 
@@ -505,10 +587,13 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
     pendingStoryRef.current = null
     setPendingConfirm(null)
     performedActionsRef.current = []
+    setAiWritingRules(aiWritingRulesSnapshotRef.current)
+    setCharacterCards(characterSnapshotRef.current)
     undo()
+    processNextInQueue()
   }
 
-  const isEmpty = node.chatHistory.length === 0 && !stage && !pendingConfirm
+  const isEmpty = node.chatHistory.length === 0 && !stage && !pendingConfirm && messageQueue.length === 0
 
   const tabStyle = (tab: Tab): React.CSSProperties => ({
     color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-muted)',
@@ -653,6 +738,60 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
               </div>
             )}
 
+            {messageQueue.length > 0 && (
+              <div className="mb-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '10px', letterSpacing: '0.05em' }}>
+                    排队中 ({messageQueue.length})
+                  </span>
+                  {messageQueue.length > 1 && (
+                    <button onClick={() => setMessageQueue([])}
+                      className="text-xs px-1.5 py-0.5 rounded hover:opacity-70 transition-opacity"
+                      style={{ color: 'rgba(200,80,80,0.7)', fontSize: '9px', border: '1px solid rgba(200,80,80,0.2)' }}>
+                      全部清除
+                    </button>
+                  )}
+                </div>
+                {messageQueue.map((item, idx) => (
+                  <div key={item.id} className="msg-enter mb-1.5 group">
+                    <div className="flex items-start gap-0 rounded overflow-hidden"
+                      style={{ border: '1px dashed rgba(240,235,224,0.12)', background: 'rgba(240,235,224,0.03)' }}>
+                      <div className="flex-shrink-0 flex items-center justify-center w-5 self-stretch"
+                        style={{ background: 'rgba(201,169,110,0.08)', color: 'var(--gold)', fontSize: '9px', fontWeight: 500 }}>
+                        {idx + 1}
+                      </div>
+                      <div className="flex-1 px-2.5 py-2 text-xs"
+                        style={{ color: 'var(--text-primary)', opacity: 0.7, lineHeight: '1.65', fontSize: '12px' }}>
+                        {item.text.length > 120 ? item.text.slice(0, 120) + '...' : item.text}
+                      </div>
+                      <div className="flex-shrink-0 flex items-center gap-0.5 px-1 self-stretch"
+                        style={{ background: 'rgba(240,235,224,0.03)' }}>
+                        <button
+                          onClick={() => { navigator.clipboard.writeText(item.text); setInput(item.text) }}
+                          title="复制到输入框"
+                          className="w-5 h-5 flex items-center justify-center rounded hover:opacity-70 transition-opacity"
+                          style={{ color: 'var(--text-muted)' }}>
+                          <svg width="10" height="10" viewBox="0 0 16 16" fill="none">
+                            <rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+                            <path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5" stroke="currentColor" strokeWidth="1.5" />
+                          </svg>
+                        </button>
+                        <button
+                          onClick={() => setMessageQueue(prev => prev.filter(m => m.id !== item.id))}
+                          title="移除"
+                          className="w-5 h-5 flex items-center justify-center rounded hover:opacity-70 transition-opacity"
+                          style={{ color: 'rgba(200,80,80,0.6)' }}>
+                          <svg width="10" height="10" viewBox="0 0 16 16" fill="none">
+                            <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {pendingConfirm && (
               <div className="msg-enter mb-2 rounded px-3 py-2.5"
                 style={{
@@ -745,8 +884,8 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                disabled={isGenerating || !apiKey || !!pendingConfirm}
-                placeholder={pendingConfirm ? '请先确认或撤销上方操作…' : isGenerating ? '生成中…' : '输入创作指令，回车发送…'}
+                disabled={!apiKey}
+                placeholder={isGenerating || pendingConfirm ? '继续输入，消息将排队等候…' : '输入创作指令，回车发送…'}
                 rows={2}
                 className="flex-1 resize-none outline-none text-xs"
                 style={{
@@ -759,23 +898,25 @@ export default function ChatPanel({ nodeId, onStreamingChange }: Props) {
               />
               <button
                 onClick={handleSend}
-                disabled={isGenerating || !apiKey || !input.trim() || !!pendingConfirm}
+                disabled={!apiKey || !input.trim()}
                 className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded transition-all"
                 style={{
                   background:
-                    isGenerating || !apiKey || !input.trim() || pendingConfirm
+                    !apiKey || !input.trim()
                       ? 'rgba(201,169,110,0.15)'
-                      : 'var(--gold)',
-                  opacity: isGenerating || !apiKey || !input.trim() || pendingConfirm ? 0.5 : 1,
+                      : isGenerating || pendingConfirm ? 'rgba(201,169,110,0.35)' : 'var(--gold)',
+                  opacity: !apiKey || !input.trim() ? 0.5 : 1,
                 }}>
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
                   <path d="M2 10L6 2L10 10L6 8L2 10Z"
-                    fill={isGenerating || !apiKey || !input.trim() || pendingConfirm ? 'var(--gold)' : '#0e0d15'} />
+                    fill={!apiKey || !input.trim() ? 'var(--gold)' : '#0e0d15'} />
                 </svg>
               </button>
             </div>
             <p className="text-center mt-1.5" style={{ color: 'var(--text-muted)', fontSize: '10px', opacity: 0.5 }}>
-              Enter 发送 · Shift+Enter 换行
+              {messageQueue.length > 0
+                ? `Enter 发送 · 队列中 ${messageQueue.length} 条`
+                : 'Enter 发送 · Shift+Enter 换行'}
             </p>
           </div>
         </>
